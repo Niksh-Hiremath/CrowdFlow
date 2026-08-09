@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+.agents
+.codex
+.openai
+.env*
+**/.env*
+node_modules
+dist
+coverage
+playwright-report
+test-results
+*.log
+.DS_Store
+.idea
+.vscode
