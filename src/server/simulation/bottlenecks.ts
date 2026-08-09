@@ -9,7 +9,11 @@ export interface BottleneckSample {
   readonly locationType: BottleneckLocationType;
   readonly locationId: string;
   readonly label: string;
+  /** Physical occupancy divided by modeled storage capacity. */
   readonly occupancyRatio: number;
+  /** Optional detector pressure, for example an outside gate queue ratio. */
+  readonly pressureRatio?: number;
+  readonly outsideQueuePeople?: number;
   readonly inflowPeoplePerMinute: number;
   readonly outflowPeoplePerMinute: number;
   readonly reasonHint?: BottleneckReason;
@@ -21,9 +25,9 @@ interface DetectorState {
   firstObservedMinute: number;
   detectedAtMinute: number | null;
   lastMinute: number;
-  lastRatio: number;
+  lastPressureRatio: number;
   trendPerMinute: number;
-  peakRatio: number;
+  peakPressureRatio: number;
   lastSample: BottleneckSample;
 }
 
@@ -42,6 +46,9 @@ function inferReason(sample: BottleneckSample, trendPerMinute: number): Bottlene
   return "high_density";
 }
 
+const samplePressureRatio = (sample: BottleneckSample): number =>
+  Math.max(sample.occupancyRatio, sample.pressureRatio ?? sample.occupancyRatio);
+
 export class PersistentBottleneckDetector {
   private readonly states = new Map<string, DetectorState>();
 
@@ -54,8 +61,9 @@ export class PersistentBottleneckDetector {
       seen.add(key);
       const prior = this.states.get(key);
       const elapsed = prior ? Math.max(1e-9, simulationTimeMinute - prior.lastMinute) : this.config.stepSeconds / 60;
-      const trend = prior ? (sample.occupancyRatio - prior.lastRatio) / elapsed : 0;
-      const above = sample.occupancyRatio >= this.config.warningOccupancyRatio;
+      const pressureRatio = samplePressureRatio(sample);
+      const trend = prior ? (pressureRatio - prior.lastPressureRatio) / elapsed : 0;
+      const above = pressureRatio >= this.config.warningOccupancyRatio;
 
       if (!prior) {
         if (above) {
@@ -65,9 +73,9 @@ export class PersistentBottleneckDetector {
             firstObservedMinute: simulationTimeMinute,
             detectedAtMinute: this.config.persistenceTicks === 1 ? simulationTimeMinute : null,
             lastMinute: simulationTimeMinute,
-            lastRatio: sample.occupancyRatio,
+            lastPressureRatio: pressureRatio,
             trendPerMinute: trend,
-            peakRatio: sample.occupancyRatio,
+            peakPressureRatio: pressureRatio,
             lastSample: sample,
           });
         }
@@ -75,10 +83,10 @@ export class PersistentBottleneckDetector {
       }
 
       prior.lastMinute = simulationTimeMinute;
-      prior.lastRatio = sample.occupancyRatio;
+      prior.lastPressureRatio = pressureRatio;
       prior.trendPerMinute = trend;
       prior.lastSample = sample;
-      prior.peakRatio = Math.max(prior.peakRatio, sample.occupancyRatio);
+      prior.peakPressureRatio = Math.max(prior.peakPressureRatio, pressureRatio);
       if (above) {
         prior.aboveTicks += 1;
         prior.clearanceTicks = 0;
@@ -108,14 +116,17 @@ export class PersistentBottleneckDetector {
     for (const [key, state] of this.states) {
       if (state.detectedAtMinute === null) continue;
       const sample = state.lastSample;
+      const pressureRatio = samplePressureRatio(sample);
       active.push({
         id: `bottleneck:${key}`,
         locationType: sample.locationType,
         locationId: sample.locationId,
         label: sample.label,
         reason: inferReason(sample, state.trendPerMinute),
-        severity: sample.occupancyRatio >= this.config.criticalOccupancyRatio ? "critical" : "warning",
+        severity: pressureRatio >= this.config.criticalOccupancyRatio ? "critical" : "warning",
         occupancyRatio: sample.occupancyRatio,
+        pressureRatio,
+        outsideQueuePeople: sample.outsideQueuePeople ?? 0,
         inflowPeoplePerMinute: sample.inflowPeoplePerMinute,
         outflowPeoplePerMinute: sample.outflowPeoplePerMinute,
         firstObservedMinute: state.firstObservedMinute,
@@ -127,7 +138,7 @@ export class PersistentBottleneckDetector {
     return active.sort(
       (a, b) =>
         (b.severity === "critical" ? 1 : 0) - (a.severity === "critical" ? 1 : 0) ||
-        b.occupancyRatio - a.occupancyRatio ||
+        b.pressureRatio - a.pressureRatio ||
         a.id.localeCompare(b.id),
     );
   }
@@ -140,4 +151,3 @@ export class PersistentBottleneckDetector {
     return detector;
   }
 }
-

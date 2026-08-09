@@ -30,29 +30,37 @@ returns `409 CONFIRMATION_REQUIRED` until the new revision is confirmed.
 
 ## Built-in scenarios
 
-| Scenario | Crowd | Schedule used by the simulation |
-|---|---:|---|
-| IPL stadium | 55,000 | arrivals 00:00-00:30 at 800/min; first innings 00:30-01:45; break 01:45-02:05; second innings 02:05-03:00; egress 03:00-03:30 |
-| Concert arena | 35,000 | doors 00:00-00:20 at 1,000/min; headline set 00:20-02:00; egress 02:00-02:30 |
-| Railway station | 12,000 | arrivals 00:00-00:40 at 250/min; platform change 00:40-00:50; train departure 00:50-01:15 |
-| Airport terminal | 8,000 | check-in 00:00-00:50 at 120/min; boarding 00:50-01:20; inbound transfer 01:20-01:40; egress 01:40-02:00 |
-| City festival | 120,000 | arrivals 00:00-00:40 at 2,500/min; headliner 00:40-01:05; sector transfer 01:05-01:25; dispersal 01:25-02:00 |
-| Narrow-corridor test | 600 | arrivals 00:00-00:10 at 60/min; hold 00:10-00:20; egress 00:20-00:35 |
-| Parallel-route test | 1,000 | arrivals 00:00-00:10 at 100/min; hold 00:10-00:20; egress 00:20-00:35 |
+| Scenario | Total crowd | Present at t=0 | Scheduled arrivals and phases |
+|---|---:|---:|---|
+| IPL stadium | 55,000 | 31,000 | remaining 24,000 at 800/min from 00:00-00:30; first innings 00:30-01:45; break 01:45-02:05; second innings 02:05-03:00; egress 03:00-03:30 |
+| Concert arena | 35,000 | 15,000 | remaining 20,000 at 1,000/min from 00:00-00:20; headline set 00:20-02:00; egress 02:00-02:30 |
+| Railway station | 12,000 | 2,000 | remaining 10,000 at 250/min from 00:00-00:40; platform change 00:40-00:50; train departure 00:50-01:15 |
+| Airport terminal | 8,000 | 2,000 | remaining 6,000 at 120/min from 00:00-00:50; boarding 00:50-01:20; inbound transfer 01:20-01:40; egress 01:40-02:00 |
+| City festival | 120,000 | 20,000 | remaining 100,000 at 2,500/min from 00:00-00:40; headliner 00:40-01:05; sector transfer 01:05-01:25; dispersal 01:25-02:00 |
+| Narrow-corridor test | 600 | 0 | 600 at 60/min from 00:00-00:10; hold 00:10-00:20; egress 00:20-00:35 |
+| Parallel-route test | 1,000 | 0 | 1,000 at 100/min from 00:00-00:10; hold 00:10-00:20; egress 00:20-00:35 |
 
 All seven scenarios use locally stored raster layouts; the final two are
 deliberately small deterministic stress fixtures for quick verification. See
 [asset attribution](public/ASSET_ATTRIBUTION.md).
 
+The total crowd is an exact demand cap and includes people present at `t=0`.
+When a draft crowd or schedule is saved, the server proportionally rescales its
+positive arrival-rate curve so its integral equals the remaining demand. If no
+positive curve exists, it creates a flat rate in the first usable non-egress
+phase. The table above shows the already-calibrated built-in defaults.
+
 ## What the engine actually does
 
 - Fixed-step conservation of people across nodes, edges, outside queues, and
   exits.
-- Directed, storage- and flow-capacity-limited links with travel time and
-  spillback.
+- Directed, storage- and flow-capacity-limited links with spillback and cohort
+  travel progress reduced by the current edge occupancy ratio.
 - Schedule-driven arrival rates, destinations, intermissions, transfers, and
   egress.
-- Persistent node/edge bottleneck detection with warning and critical bands.
+- Persistent node/edge bottleneck detection with warning and critical bands;
+  outside gate queues contribute a separate pressure signal and are not counted
+  as physical node occupancy.
 - Congestion-weighted route alternatives.
 - Forecasting by cloning and advancing the deterministic state.
 - Counterfactual reroute evaluation using peak occupancy, congestion exposure,
@@ -61,9 +69,10 @@ deliberately small deterministic stress fixtures for quick verification. See
   and flow limits.
 
 The LLM does not run the simulation. It receives a validated `FindingBundle`
-containing only simulator-owned evidence: the active schedule phase, measured
-bottlenecks, forecast onset, graph-valid route IDs, and counterfactual deltas.
-Structured advice must cite those IDs, and unknown references are rejected.
+containing only simulator-owned evidence: the active schedule phase, modeled
+bottlenecks, forecast onset, same-origin/destination route-edge evidence, and
+counterfactual deltas. Structured advice must cite existing finding, evidence,
+node, and edge IDs; unknown or unsupported references are rejected.
 
 ## Run locally
 

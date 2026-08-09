@@ -146,7 +146,7 @@ export class SimulationEngine {
             occupancyRatio: ratio,
             inflowPeoplePerMinute: state.inflowThisTick / stepMinutes,
             outflowPeoplePerMinute: state.outflowThisTick / stepMinutes,
-            speedFactor: Math.max(0.08, 1 - ratio * ratio),
+            speedFactor: this.edgeSpeedFactor(edge, state),
           },
         ];
       }),
@@ -229,7 +229,10 @@ export class SimulationEngine {
         bottleneck: Bottleneck;
         onset: number;
         duration: number;
-        peak: number;
+        peakOccupancy: number;
+        peakPressure: number;
+        peakOutsideQueue: number;
+        reason: Bottleneck["reason"];
         severity: Bottleneck["severity"];
       }
     >();
@@ -243,14 +246,26 @@ export class SimulationEngine {
             bottleneck,
             onset: snapshot.simulationTimeMinute,
             duration: stepMinutes,
-            peak: bottleneck.occupancyRatio,
+            peakOccupancy: bottleneck.occupancyRatio,
+            peakPressure: bottleneck.pressureRatio,
+            peakOutsideQueue: bottleneck.outsideQueuePeople,
+            reason: bottleneck.reason,
             severity: bottleneck.severity,
           });
         } else {
           existing.duration += stepMinutes;
-          existing.peak = Math.max(existing.peak, bottleneck.occupancyRatio);
+          existing.peakOccupancy = Math.max(existing.peakOccupancy, bottleneck.occupancyRatio);
+          existing.peakOutsideQueue = Math.max(
+            existing.peakOutsideQueue,
+            bottleneck.outsideQueuePeople,
+          );
+          if (bottleneck.pressureRatio > existing.peakPressure + EPSILON) {
+            existing.peakPressure = bottleneck.pressureRatio;
+            existing.reason = bottleneck.reason;
+          }
           if (severityRank(bottleneck.severity) > severityRank(existing.severity)) {
             existing.severity = bottleneck.severity;
+            existing.reason = bottleneck.reason;
           }
         }
       }
@@ -271,7 +286,10 @@ export class SimulationEngine {
           predictedOnsetMinute: record.onset,
           leadTimeMinutes,
           predictedDurationMinutes: record.duration,
-          predictedPeakOccupancyRatio: record.peak,
+          predictedPeakOccupancyRatio: record.peakOccupancy,
+          predictedPeakPressureRatio: record.peakPressure,
+          predictedPeakOutsideQueuePeople: record.peakOutsideQueue,
+          reason: record.reason,
           severity: record.severity,
           confidence: leadTimeMinutes === 0
             ? 0.99
@@ -402,7 +420,10 @@ export class SimulationEngine {
   private advanceEdges(stepMinutes: number): void {
     for (const edge of [...this.preset.graph.edges].sort((a, b) => a.id.localeCompare(b.id))) {
       const edgeState = this.edgeStates.get(edge.id)!;
-      for (const cohort of edgeState.cohorts) cohort.remainingSeconds -= this.config.stepSeconds;
+      const speedFactor = this.edgeSpeedFactor(edge, edgeState);
+      for (const cohort of edgeState.cohorts) {
+        cohort.remainingSeconds -= this.config.stepSeconds * speedFactor;
+      }
       const target = this.nodeById.get(edge.target)!;
       const targetState = this.nodeStates.get(edge.target)!;
       let transferLimit = Math.min(
@@ -521,12 +542,17 @@ export class SimulationEngine {
       const state = this.nodeStates.get(venueNode.id)!;
       const occupancyRatio = state.occupancyPeople / venueNode.capacityPeople;
       const outsideQueue = this.outsideQueues.get(venueNode.id) ?? 0;
-      const effectiveRatio = Math.max(occupancyRatio, Math.min(1, outsideQueue / venueNode.capacityPeople));
+      const pressureRatio = Math.max(
+        occupancyRatio,
+        Math.min(1, outsideQueue / venueNode.capacityPeople),
+      );
       samples.push({
         locationType: "node",
         locationId: venueNode.id,
         label: venueNode.label,
-        occupancyRatio: effectiveRatio,
+        occupancyRatio,
+        pressureRatio,
+        outsideQueuePeople: outsideQueue,
         inflowPeoplePerMinute: state.inflowThisTick / stepMinutes,
         outflowPeoplePerMinute: state.outflowThisTick / stepMinutes,
         ...(outsideQueue > EPSILON ? { reasonHint: "gate_imbalance" as const } : {}),
@@ -614,6 +640,11 @@ export class SimulationEngine {
 
   private edgeOccupancy(state: MutableEdgeState): number {
     return state.cohorts.reduce((total, cohort) => total + cohort.amountPeople, 0);
+  }
+
+  private edgeSpeedFactor(edge: VenueEdge, state: MutableEdgeState): number {
+    const occupancyRatio = this.edgeOccupancy(state) / edge.capacityPeople;
+    return Math.max(0.08, 1 - occupancyRatio * occupancyRatio);
   }
 
   private updateIntegratedMetrics(stepMinutes: number): void {
@@ -747,4 +778,3 @@ export function simulateScenario(
   }
   return snapshots;
 }
-

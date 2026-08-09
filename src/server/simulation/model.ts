@@ -31,7 +31,11 @@ export interface Bottleneck {
   readonly label: string;
   readonly reason: BottleneckReason;
   readonly severity: BottleneckSeverity;
+  /** Physical people/storage ratio at the location. */
   readonly occupancyRatio: number;
+  /** Detector signal after including explicit queue pressure, if any. */
+  readonly pressureRatio: number;
+  readonly outsideQueuePeople: number;
   readonly inflowPeoplePerMinute: number;
   readonly outflowPeoplePerMinute: number;
   readonly firstObservedMinute: number;
@@ -49,6 +53,9 @@ export interface BottleneckForecast {
   readonly leadTimeMinutes: number;
   readonly predictedDurationMinutes: number;
   readonly predictedPeakOccupancyRatio: number;
+  readonly predictedPeakPressureRatio: number;
+  readonly predictedPeakOutsideQueuePeople: number;
+  readonly reason: BottleneckReason;
   readonly severity: BottleneckSeverity;
   /** Deterministic confidence decreases with forecast horizon. */
   readonly confidence: number;
@@ -159,4 +166,3 @@ export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = {
   counterfactualHorizonMinutes: 10,
   maxRouteAlternatives: 3,
 };
-
