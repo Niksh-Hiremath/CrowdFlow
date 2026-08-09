@@ -111,7 +111,7 @@ export interface AdviceResponse {
     }[];
   };
   reroutes?: readonly {
-    policy: { id: string; label: string; avoidEdgeIds: readonly string[] };
+    policy: ReroutePolicyView;
     metrics: {
       recommended: boolean;
       peakOccupancyRatioDelta: number;
@@ -119,6 +119,27 @@ export interface AdviceResponse {
       exitedPeopleDelta: number;
     };
   }[];
+}
+
+export interface ReroutePolicyView {
+  id: string;
+  label: string;
+  avoidEdgeIds: readonly string[];
+  preferEdgeIds?: readonly string[];
+  penaltyMultiplier?: number;
+  compliance?: number;
+}
+
+export class ApiRequestError extends Error {
+  public readonly status: number;
+  public readonly code?: string;
+
+  public constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -132,8 +153,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(payload?.error ?? `Request failed (${response.status})`);
+    const payload = await response.json().catch(() => null) as { error?: string; code?: string } | null;
+    throw new ApiRequestError(payload?.error ?? `Request failed (${response.status})`, response.status, payload?.code);
   }
 
   return (await response.json()) as T;
@@ -207,7 +228,11 @@ export const api = {
   },
 
   applyReroute(sessionId: string, policyId?: string) {
-    return request<{ applied: boolean; snapshot: RuntimeSnapshot }>(`/api/sessions/${sessionId}/reroute`, {
+    return request<{
+      applied: boolean;
+      evaluation: { policy: ReroutePolicyView };
+      snapshot: RuntimeSnapshot;
+    }>(`/api/sessions/${sessionId}/reroute`, {
       method: "POST",
       body: JSON.stringify({ policyId }),
     });

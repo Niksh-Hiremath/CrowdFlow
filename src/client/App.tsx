@@ -16,12 +16,19 @@ import {
   isEntryNode,
   isExitNode,
   type ScheduleBlock,
+  type VenueEdge,
   type VenueGraph,
   type VenueNode,
   type VenueNodeType,
   type VenuePreset,
 } from "../shared/types";
-import { api, type AdviceResponse, type RuntimeSnapshot } from "./api";
+import {
+  api,
+  ApiRequestError,
+  type AdviceResponse,
+  type ReroutePolicyView,
+  type RuntimeSnapshot,
+} from "./api";
 
 type Screen = "setup" | "review" | "live";
 type LayerKey = "network" | "crowd" | "risk" | "routes" | "labels";
@@ -73,6 +80,15 @@ const NODE_SYMBOL: Record<VenueNodeType, string> = {
   platform: "PF",
 };
 
+const SCHEDULE_PHASES: readonly ScheduleBlock["phase"][] = [
+  "arrival",
+  "event",
+  "intermission",
+  "transfer",
+  "egress",
+  "disruption",
+];
+
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
@@ -100,6 +116,28 @@ const parseMinute = (value: string) => {
   return hours * 60 + minutes;
 };
 
+const formatWeights = (weights: Readonly<Record<string, number>>) =>
+  Object.entries(weights).map(([nodeId, weight]) => `${nodeId}:${weight}`).join(", ");
+
+const parseWeights = (value: string): Readonly<Record<string, number>> =>
+  Object.fromEntries(value.split(",").map((entry) => entry.trim()).filter(Boolean).flatMap((entry) => {
+    const separator = entry.lastIndexOf(":");
+    if (separator < 1) return [];
+    const nodeId = entry.slice(0, separator).trim();
+    const weight = Number(entry.slice(separator + 1).trim());
+    return nodeId && Number.isFinite(weight) && weight >= 0 ? [[nodeId, weight] as const] : [];
+  }));
+
+const uniqueId = (prefix: string, existingIds: readonly string[]) => {
+  const ids = new Set(existingIds);
+  let index = ids.size + 1;
+  while (ids.has(`${prefix}-${index}`)) index += 1;
+  return `${prefix}-${index}`;
+};
+
+const nodeLabel = (graph: VenueGraph, nodeId: string) =>
+  graph.nodes.find((node) => node.id === nodeId)?.label ?? nodeId;
+
 const riskForNode = (node: VenueNode, index: number, minute: number) => {
   const hotspot = ["concession", "security", "platform", "walkway_junction"].includes(
     node.type,
@@ -118,6 +156,7 @@ const compactNumber = new Intl.NumberFormat("en-IN", { notation: "compact" });
 function validateGraph(graph: VenueGraph) {
   const entries = graph.nodes.filter(isEntryNode);
   const exits = graph.nodes.filter(isExitNode);
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
   const exitIds = new Set(exits.map((node) => node.id));
   const adjacency = new Map<string, string[]>();
 
@@ -146,7 +185,23 @@ function validateGraph(graph: VenueGraph) {
     { label: "At least one entry gate", pass: entries.length > 0 },
     { label: "At least one marked exit", pass: exits.length > 0 },
     { label: "Every entry reaches an exit", pass: entries.length > 0 && entries.every(entryHasExit) },
-    { label: "All capacities are positive", pass: graph.nodes.every((node) => node.capacityPeople > 0) },
+    {
+      label: "Node capacities and flow limits are positive",
+      pass: graph.nodes.every((node) => node.capacityPeople > 0 && node.maxThroughputPerMinute > 0),
+    },
+    {
+      label: "Directed links have valid endpoints and dimensions",
+      pass: graph.edges.length > 0 && graph.edges.every((edge) =>
+        nodeIds.has(edge.source) &&
+        nodeIds.has(edge.target) &&
+        edge.source !== edge.target &&
+        edge.lengthMeters > 0 &&
+        edge.widthMeters > 0 &&
+        edge.capacityPeople > 0 &&
+        edge.maxFlowPerMinute > 0 &&
+        edge.freeSpeedMps > 0,
+      ),
+    },
   ];
 }
 
@@ -172,6 +227,16 @@ export function App() {
     if (uploadPreviewUrl) URL.revokeObjectURL(uploadPreviewUrl);
   }, [uploadPreviewUrl]);
 
+  const invalidateConfirmation = useCallback((message: string) => {
+    setConfirmed(false);
+    setInitialSnapshot(null);
+    setStatus(message);
+  }, []);
+
+  useEffect(() => {
+    if (screen === "live" && (!confirmed || !sessionId || !initialSnapshot)) setScreen("review");
+  }, [confirmed, initialSnapshot, screen, sessionId]);
+
   const selectPreset = (preset: VenuePreset) => {
     setPresetId(preset.id);
     setGraph(cloneGraph(preset.graph));
@@ -188,6 +253,8 @@ export function App() {
 
   const beginReview = async () => {
     setBusy(true);
+    setConfirmed(false);
+    setInitialSnapshot(null);
     setStatus("Extracting a draft navigation graph…");
     let completed = false;
     try {
@@ -219,13 +286,24 @@ export function App() {
 
   const updateGraph = useCallback((nextGraph: VenueGraph) => {
     setGraph(nextGraph);
-    setConfirmed(false);
-    setStatus("Graph changed. Confirmation is required again.");
-  }, []);
+    invalidateConfirmation("Graph changed. Confirmation is required again.");
+  }, [invalidateConfirmation]);
+
+  const updateCrowdSize = useCallback((value: number) => {
+    setCrowdSize(value);
+    setSessionId(null);
+    invalidateConfirmation("Crowd demand changed. Extract and confirm the updated scenario.");
+  }, [invalidateConfirmation]);
+
+  const updateSchedule = useCallback((nextSchedule: ScheduleBlock[]) => {
+    setSchedule(nextSchedule);
+    setSessionId(null);
+    invalidateConfirmation("Schedule changed. Extract and confirm the updated scenario.");
+  }, [invalidateConfirmation]);
 
   const changeScreen = (next: Screen) => {
     if (next === "review" && screen === "setup") return;
-    if (next === "live" && !confirmed) return;
+    if (next === "live" && (!confirmed || !sessionId || !initialSnapshot)) return;
     setScreen(next);
   };
 
@@ -244,7 +322,7 @@ export function App() {
               type="button"
               className={screen === step ? "step active" : "step"}
               onClick={() => changeScreen(step)}
-              disabled={(step === "review" && screen === "setup") || (step === "live" && !confirmed)}
+              disabled={(step === "review" && screen === "setup") || (step === "live" && (!confirmed || !sessionId || !initialSnapshot))}
               aria-current={screen === step ? "step" : undefined}
             >
               <span>{String(index + 1).padStart(2, "0")}</span>{step}
@@ -266,13 +344,14 @@ export function App() {
             uploadName={uploadName}
             busy={busy}
             onPreset={selectPreset}
-            onCrowdSize={setCrowdSize}
-            onSchedule={setSchedule}
+            onCrowdSize={updateCrowdSize}
+            onSchedule={updateSchedule}
             onUpload={(file) => {
               setUploadName(file?.name ?? "");
               setUploadFile(file);
               setUploadPreviewUrl(file ? URL.createObjectURL(file) : "");
-              setConfirmed(false);
+              setSessionId(null);
+              invalidateConfirmation("Layout changed. Extract and confirm the updated graph.");
             }}
             onContinue={beginReview}
           />
@@ -288,7 +367,10 @@ export function App() {
             confirmed={confirmed}
             sessionId={sessionId}
             onGraph={updateGraph}
-            onConfirmed={(message) => {
+            onConfirmed={(message, response) => {
+              if (response.graph) setGraph(cloneGraph(response.graph));
+              if (response.schedule) setSchedule(cloneSchedule(response.schedule));
+              if (typeof response.crowdSize === "number") setCrowdSize(response.crowdSize);
               setConfirmed(true);
               setStatus(message);
             }}
@@ -298,7 +380,11 @@ export function App() {
                 const response = await api.startSimulation(sessionId);
                 setInitialSnapshot(response.snapshot);
               } catch (error) {
-                setStatus(error instanceof Error ? error.message : "Simulation could not start.");
+                if (error instanceof ApiRequestError && error.code === "CONFIRMATION_REQUIRED") {
+                  invalidateConfirmation("The server rejected stale confirmation. Review and confirm the current scenario again.");
+                } else {
+                  setStatus(error instanceof Error ? error.message : "Simulation could not start.");
+                }
                 return;
               }
               setScreen("live");
@@ -308,7 +394,7 @@ export function App() {
           />
         )}
 
-        {screen === "live" && (
+        {screen === "live" && confirmed && sessionId && initialSnapshot && (
           <LiveScreen
             graph={graph}
             crowdSize={crowdSize}
@@ -438,16 +524,25 @@ function SetupScreen(props: SetupProps) {
             <div><span className="section-index">03</span><div><p>EVENT CLOCK</p><h2 id="schedule-heading">Schedule phases</h2></div></div>
             <button type="button" className="text-button" onClick={addBlock}>+ ADD PHASE</button>
           </div>
+          <p className="schedule-helper">Every simulator schedule field is editable. Enter routing weights as <code>node_id:weight</code>, separated by commas.</p>
           <div className="schedule-list">
             {props.schedule.map((block, index) => (
               <div className="schedule-row" key={block.id}>
-                <span className={`phase-chip phase-${block.phase}`}>{String(index + 1).padStart(2, "0")}</span>
-                <label><span>Phase name</span><input value={block.label} onChange={(event) => updateBlock(index, { label: event.target.value })} /></label>
-                <label><span>Start</span><input type="time" value={formatMinute(block.startMinute)} onChange={(event) => updateBlock(index, { startMinute: parseMinute(event.target.value) })} /></label>
-                <span className="time-arrow" aria-hidden="true">→</span>
-                <label><span>End</span><input type="time" value={formatMinute(block.endMinute)} onChange={(event) => updateBlock(index, { endMinute: parseMinute(event.target.value) })} /></label>
-                <label><span>Arrivals/min</span><input type="number" min="0" value={block.arrivalRatePerMinute} onChange={(event) => updateBlock(index, { arrivalRatePerMinute: Math.max(0, Number(event.target.value)) })} /></label>
-                <button type="button" className="icon-button" aria-label={`Remove ${block.label}`} disabled={props.schedule.length === 1} onClick={() => props.onSchedule(props.schedule.filter((_, current) => current !== index))}>×</button>
+                <div className="schedule-primary">
+                  <span className={`phase-chip phase-${block.phase}`}>{String(index + 1).padStart(2, "0")}</span>
+                  <label><span>Phase name</span><input value={block.label} onChange={(event) => updateBlock(index, { label: event.target.value })} /></label>
+                  <label><span>Start</span><input type="time" value={formatMinute(block.startMinute)} onChange={(event) => updateBlock(index, { startMinute: parseMinute(event.target.value) })} /></label>
+                  <span className="time-arrow" aria-hidden="true">→</span>
+                  <label><span>End</span><input type="time" value={formatMinute(block.endMinute)} onChange={(event) => updateBlock(index, { endMinute: parseMinute(event.target.value) })} /></label>
+                  <label><span>Arrivals/min</span><input type="number" min="0" value={block.arrivalRatePerMinute} onChange={(event) => updateBlock(index, { arrivalRatePerMinute: Math.max(0, Number(event.target.value)) })} /></label>
+                  <button type="button" className="icon-button" aria-label={`Remove ${block.label}`} disabled={props.schedule.length === 1} onClick={() => props.onSchedule(props.schedule.filter((_, current) => current !== index))}>×</button>
+                </div>
+                <div className="schedule-advanced">
+                  <label><span>Phase type</span><select value={block.phase} onChange={(event) => updateBlock(index, { phase: event.target.value as ScheduleBlock["phase"] })}>{SCHEDULE_PHASES.map((phase) => <option key={phase} value={phase}>{phase.replaceAll("_", " ")}</option>)}</select></label>
+                  <label><span>Reroute compliance %</span><input type="number" min="0" max="100" value={Math.round(block.rerouteCompliance * 100)} onChange={(event) => updateBlock(index, { rerouteCompliance: clamp(Number(event.target.value) / 100, 0, 1) })} /></label>
+                  <label className="weights-field"><span>Entry weights</span><textarea aria-label={`${block.label} entry weights`} defaultValue={formatWeights(block.entryWeights)} onBlur={(event) => updateBlock(index, { entryWeights: parseWeights(event.target.value) })} placeholder="gate_n:0.6, gate_s:0.4" /></label>
+                  <label className="weights-field"><span>Target weights</span><textarea aria-label={`${block.label} target weights`} defaultValue={formatWeights(block.targetWeights)} onBlur={(event) => updateBlock(index, { targetWeights: parseWeights(event.target.value) })} placeholder="stage:0.8, food:0.2" /></label>
+                </div>
               </div>
             ))}
           </div>
@@ -489,26 +584,30 @@ interface ReviewProps {
   confirmed: boolean;
   sessionId: string | null;
   onGraph: (graph: VenueGraph) => void;
-  onConfirmed: (message: string) => void;
+  onConfirmed: (message: string, response: Awaited<ReturnType<typeof api.confirmSession>>) => void;
   onStart: () => void;
   onBack: () => void;
 }
 
 function ReviewScreen(props: ReviewProps) {
   const [selectedNodeId, setSelectedNodeId] = useState(props.graph.nodes[0]?.id ?? "");
+  const [selectedEdgeId, setSelectedEdgeId] = useState(props.graph.edges[0]?.id ?? "");
+  const [inspectorMode, setInspectorMode] = useState<"node" | "edge">("node");
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState("");
   const checks = useMemo(() => validateGraph(props.graph), [props.graph]);
   const valid = checks.every((check) => check.pass) && Boolean(props.sessionId);
   const selectedNode = props.graph.nodes.find((node) => node.id === selectedNodeId);
+  const selectedEdge = props.graph.edges.find((edge) => edge.id === selectedEdgeId);
 
   const confirm = async () => {
     if (!valid) return;
     setConfirming(true);
     setConfirmError("");
+    let response: Awaited<ReturnType<typeof api.confirmSession>>;
     try {
       await api.saveGraph(props.sessionId!, props.graph);
-      const response = await api.confirmSession(props.sessionId!, { graph: props.graph, crowdSize: props.crowdSize, schedule: props.schedule });
+      response = await api.confirmSession(props.sessionId!, { graph: props.graph, crowdSize: props.crowdSize, schedule: props.schedule });
       if (!response.confirmed) {
         setConfirmError(response.validation?.messages.join(" ") || "The server rejected this graph.");
         setConfirming(false);
@@ -519,7 +618,7 @@ function ReviewScreen(props: ReviewProps) {
       setConfirming(false);
       return;
     }
-    props.onConfirmed("Graph confirmed. Simulation controls are now unlocked.");
+    props.onConfirmed("Graph confirmed. Simulation controls are now unlocked.", response);
     setConfirming(false);
   };
 
@@ -530,41 +629,119 @@ function ReviewScreen(props: ReviewProps) {
     });
   };
 
+  const addNode = () => {
+    const id = uniqueId("node", props.graph.nodes.map((node) => node.id));
+    const anchor = selectedNode ?? { x: 0.5, y: 0.5 };
+    const node: VenueNode = {
+      id,
+      label: "New junction",
+      type: "walkway_junction",
+      x: clamp(anchor.x + 0.04, 0.025, 0.975),
+      y: clamp(anchor.y + 0.04, 0.04, 0.96),
+      capacityPeople: 120,
+      maxThroughputPerMinute: 60,
+    };
+    props.onGraph({ ...props.graph, nodes: [...props.graph.nodes, node] });
+    setSelectedNodeId(id);
+    setInspectorMode("node");
+  };
+
   const removeNode = () => {
     if (!selectedNode) return;
+    const removesSelectedEdge = Boolean(selectedEdge && (
+      selectedEdge.source === selectedNode.id || selectedEdge.target === selectedNode.id
+    ));
     props.onGraph({
       nodes: props.graph.nodes.filter((node) => node.id !== selectedNode.id),
       edges: props.graph.edges.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id),
     });
     setSelectedNodeId("");
+    if (removesSelectedEdge) setSelectedEdgeId("");
+  };
+
+  const updateEdge = (edgeId: string, patch: Partial<VenueEdge>) => {
+    props.onGraph({
+      ...props.graph,
+      edges: props.graph.edges.map((edge) => edge.id === edgeId ? { ...edge, ...patch } : edge),
+    });
+  };
+
+  const addEdge = () => {
+    if (props.graph.nodes.length < 2) return;
+    const source = selectedNode ?? props.graph.nodes[0]!;
+    const target = props.graph.nodes.find((node) =>
+      node.id !== source.id && !props.graph.edges.some((edge) => edge.source === source.id && edge.target === node.id),
+    ) ?? props.graph.nodes.find((node) => node.id !== source.id)!;
+    const id = uniqueId("edge", props.graph.edges.map((edge) => edge.id));
+    const distance = Math.hypot(target.x - source.x, target.y - source.y);
+    const edge: VenueEdge = {
+      id,
+      source: source.id,
+      target: target.id,
+      lengthMeters: Math.max(5, Math.round(distance * 180)),
+      widthMeters: 3,
+      capacityPeople: Math.max(1, Math.min(source.capacityPeople, target.capacityPeople)),
+      maxFlowPerMinute: Math.max(1, Math.min(source.maxThroughputPerMinute, target.maxThroughputPerMinute)),
+      freeSpeedMps: 1.3,
+    };
+    props.onGraph({ ...props.graph, edges: [...props.graph.edges, edge] });
+    setSelectedEdgeId(id);
+    setInspectorMode("edge");
+  };
+
+  const removeEdge = () => {
+    if (!selectedEdge) return;
+    props.onGraph({ ...props.graph, edges: props.graph.edges.filter((edge) => edge.id !== selectedEdge.id) });
+    setSelectedEdgeId("");
   };
 
   return (
     <div className="review-layout">
       <header className="screen-heading">
-        <div><p className="eyebrow"><span>GRAPH TRUST GATE</span> OPERATOR REVIEW</p><h1>Review the extracted network</h1><p>Drag markers to correct their position, inspect capacities, then explicitly confirm the graph.</p></div>
-        <div className="review-summary"><span>{props.graph.nodes.length}<small>NODES</small></span><span>{props.graph.edges.length}<small>LINKS</small></span><span>{compactNumber.format(props.crowdSize)}<small>PEOPLE</small></span></div>
+        <div><p className="eyebrow"><span>GRAPH TRUST GATE</span> OPERATOR REVIEW</p><h1>Review the extracted network</h1><p>Correct nodes and directed links, verify every physical limit, then explicitly confirm the graph.</p></div>
+        <div className="review-summary"><span data-testid="review-node-count">{props.graph.nodes.length}<small>NODES</small></span><span data-testid="review-link-count">{props.graph.edges.length}<small>LINKS</small></span><span>{compactNumber.format(props.crowdSize)}<small>PEOPLE</small></span></div>
       </header>
 
       <div className="review-workspace">
         <section className="map-card" aria-label="Editable venue graph">
-          <div className="map-toolbar"><span className="mode-pill"><i /> EDIT MODE</span><span>Drag or use arrow keys to move a selected marker</span><div><kbd>+</kbd><kbd>−</kbd><kbd>⌖</kbd></div></div>
-          <VenueViewport graph={props.graph} backgroundPath={props.backgroundPath} editable selectedNodeId={selectedNodeId} onSelectNode={setSelectedNodeId} onGraph={props.onGraph} layers={DEFAULT_LAYERS} minute={0} />
+          <div className="map-toolbar"><span className="mode-pill"><i /> EDIT MODE</span><span>Drag nodes or select a directed link to inspect it</span><div><button type="button" className="toolbar-button" onClick={addNode}>+ NODE</button><button type="button" className="toolbar-button" onClick={addEdge} disabled={props.graph.nodes.length < 2}>+ LINK</button></div></div>
+          <VenueViewport graph={props.graph} backgroundPath={props.backgroundPath} editable selectedNodeId={selectedNodeId} selectedEdgeId={selectedEdgeId} onSelectNode={(id) => { setSelectedNodeId(id); setInspectorMode("node"); }} onSelectEdge={(id) => { setSelectedEdgeId(id); setInspectorMode("edge"); }} onGraph={props.onGraph} layers={DEFAULT_LAYERS} minute={0} />
           <div className="map-legend"><span><i className="legend-entry" />Entry</span><span><i className="legend-poi" />POI</span><span><i className="legend-exit" />Exit</span><span><i className="legend-link" />Directed path</span></div>
         </section>
 
         <aside className="review-sidebar">
           <section className="panel inspector-panel">
-            <div className="panel-title"><p>NODE INSPECTOR</p><span>{selectedNode ? NODE_SYMBOL[selectedNode.type] : "--"}</span></div>
-            {selectedNode ? (
-              <div className="inspector-form">
+            <div className="panel-title inspector-title">
+              <div className="inspector-tabs" role="tablist" aria-label="Graph inspector">
+                <button type="button" role="tab" aria-selected={inspectorMode === "node"} className={inspectorMode === "node" ? "active" : ""} onClick={() => setInspectorMode("node")}>NODES</button>
+                <button type="button" role="tab" aria-selected={inspectorMode === "edge"} className={inspectorMode === "edge" ? "active" : ""} onClick={() => setInspectorMode("edge")}>LINKS</button>
+              </div>
+              <span>{inspectorMode === "node" && selectedNode ? NODE_SYMBOL[selectedNode.type] : inspectorMode === "edge" && selectedEdge ? "→" : "--"}</span>
+            </div>
+            {inspectorMode === "node" && (selectedNode ? (
+              <div className="inspector-form" role="tabpanel">
+                <label><span>Select node</span><select aria-label="Select node" value={selectedNode.id} onChange={(event) => setSelectedNodeId(event.target.value)}>{props.graph.nodes.map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select></label>
                 <label><span>Label</span><input value={selectedNode.label} onChange={(event) => updateNode(selectedNode.id, { label: event.target.value })} /></label>
                 <label><span>Type</span><select value={selectedNode.type} onChange={(event) => updateNode(selectedNode.id, { type: event.target.value as VenueNodeType })}>{Object.keys(NODE_SYMBOL).map((type) => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}</select></label>
-                <div className="two-field"><label><span>Capacity</span><input type="number" min="1" value={selectedNode.capacityPeople} onChange={(event) => updateNode(selectedNode.id, { capacityPeople: Math.max(1, Number(event.target.value)) })} /></label><label><span>Flow / min</span><input type="number" min="1" value={selectedNode.maxThroughputPerMinute} onChange={(event) => updateNode(selectedNode.id, { maxThroughputPerMinute: Math.max(1, Number(event.target.value)) })} /></label></div>
+                <div className="two-field"><label><span>Capacity people</span><input type="number" min="1" value={selectedNode.capacityPeople} onChange={(event) => updateNode(selectedNode.id, { capacityPeople: Math.max(1, Number(event.target.value)) })} /></label><label><span>Throughput / min</span><input type="number" min="1" value={selectedNode.maxThroughputPerMinute} onChange={(event) => updateNode(selectedNode.id, { maxThroughputPerMinute: Math.max(1, Number(event.target.value)) })} /></label></div>
                 <div className="coordinate-readout"><span>X {selectedNode.x.toFixed(3)}</span><span>Y {selectedNode.y.toFixed(3)}</span></div>
-                <button type="button" className="danger-button" onClick={removeNode}>REMOVE NODE</button>
+                <div className="inspector-actions"><button type="button" className="secondary-button" onClick={addNode}>+ ADD NODE</button><button type="button" className="danger-button" onClick={removeNode}>REMOVE</button></div>
               </div>
-            ) : <p className="empty-copy">Select a map marker to inspect it.</p>}
+            ) : <div className="empty-inspector"><p className="empty-copy">Select a map marker or create a node.</p><button type="button" className="secondary-button" onClick={addNode}>+ ADD NODE</button></div>)}
+            {inspectorMode === "edge" && (selectedEdge ? (
+              <div className="inspector-form" role="tabpanel">
+                <label><span>Select directed link</span><select aria-label="Select directed link" value={selectedEdge.id} onChange={(event) => setSelectedEdgeId(event.target.value)}>{props.graph.edges.map((edge) => <option key={edge.id} value={edge.id}>{nodeLabel(props.graph, edge.source)} → {nodeLabel(props.graph, edge.target)}</option>)}</select></label>
+                <div className="two-field">
+                  <label><span>Source</span><select aria-label="Link source" value={selectedEdge.source} onChange={(event) => updateEdge(selectedEdge.id, { source: event.target.value })}>{props.graph.nodes.map((node) => <option key={node.id} value={node.id} disabled={node.id === selectedEdge.target}>{node.label}</option>)}</select></label>
+                  <label><span>Target</span><select aria-label="Link target" value={selectedEdge.target} onChange={(event) => updateEdge(selectedEdge.id, { target: event.target.value })}>{props.graph.nodes.map((node) => <option key={node.id} value={node.id} disabled={node.id === selectedEdge.source}>{node.label}</option>)}</select></label>
+                </div>
+                <div className="two-field"><label><span>Length metres</span><input aria-label="Link length metres" type="number" min="0.1" step="0.1" value={selectedEdge.lengthMeters} onChange={(event) => updateEdge(selectedEdge.id, { lengthMeters: Math.max(0.1, Number(event.target.value)) })} /></label><label><span>Width metres</span><input aria-label="Link width metres" type="number" min="0.1" step="0.1" value={selectedEdge.widthMeters} onChange={(event) => updateEdge(selectedEdge.id, { widthMeters: Math.max(0.1, Number(event.target.value)) })} /></label></div>
+                <div className="two-field"><label><span>Capacity people</span><input aria-label="Link capacity people" type="number" min="1" value={selectedEdge.capacityPeople} onChange={(event) => updateEdge(selectedEdge.id, { capacityPeople: Math.max(1, Number(event.target.value)) })} /></label><label><span>Flow / min</span><input aria-label="Link flow per minute" type="number" min="1" value={selectedEdge.maxFlowPerMinute} onChange={(event) => updateEdge(selectedEdge.id, { maxFlowPerMinute: Math.max(1, Number(event.target.value)) })} /></label></div>
+                <label><span>Free speed m/s</span><input aria-label="Link free speed metres per second" type="number" min="0.1" step="0.1" value={selectedEdge.freeSpeedMps} onChange={(event) => updateEdge(selectedEdge.id, { freeSpeedMps: Math.max(0.1, Number(event.target.value)) })} /></label>
+                <p className="direction-note">Directed link: flow is modeled from source to target. Add the reverse link separately when required.</p>
+                <div className="inspector-actions"><button type="button" className="secondary-button" onClick={addEdge} disabled={props.graph.nodes.length < 2}>+ ADD LINK</button><button type="button" className="danger-button" onClick={removeEdge}>REMOVE</button></div>
+              </div>
+            ) : <div className="empty-inspector"><p className="empty-copy">Select a map link or add one between two nodes.</p><button type="button" className="secondary-button" onClick={addEdge} disabled={props.graph.nodes.length < 2}>+ ADD LINK</button></div>)}
           </section>
 
           <section className="panel validation-panel">
@@ -587,7 +764,9 @@ interface ViewportProps {
   backgroundPath?: string;
   editable?: boolean;
   selectedNodeId?: string;
+  selectedEdgeId?: string;
   onSelectNode?: (id: string) => void;
+  onSelectEdge?: (id: string) => void;
   onGraph?: (graph: VenueGraph) => void;
   layers: LayerState;
   minute: number;
@@ -638,9 +817,36 @@ function VenueViewport(props: ViewportProps) {
         onPointerUp={() => setDragId(null)}
         onPointerCancel={() => setDragId(null)}
       >
-        <defs><radialGradient id="risk-critical"><stop offset="0" stopColor="#ff5c62" stopOpacity=".72"/><stop offset="1" stopColor="#ff5c62" stopOpacity="0"/></radialGradient><radialGradient id="risk-warning"><stop offset="0" stopColor="#ffc857" stopOpacity=".58"/><stop offset="1" stopColor="#ffc857" stopOpacity="0"/></radialGradient></defs>
+        <defs><radialGradient id="risk-critical"><stop offset="0" stopColor="#ff5c62" stopOpacity=".72"/><stop offset="1" stopColor="#ff5c62" stopOpacity="0"/></radialGradient><radialGradient id="risk-warning"><stop offset="0" stopColor="#ffc857" stopOpacity=".58"/><stop offset="1" stopColor="#ffc857" stopOpacity="0"/></radialGradient><marker id="edge-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker></defs>
         {props.layers.risk && !props.editable && <g className="risk-layer">{props.graph.nodes.map((node, index) => { const score = scoreForNode(node, index); return score > 0.58 ? <circle key={node.id} cx={node.x * 1000} cy={node.y * 620} r={score * 96} fill={score > 0.8 ? "url(#risk-critical)" : "url(#risk-warning)"} /> : null; })}</g>}
-        {props.layers.network && <g className="edge-layer">{props.graph.edges.map((edge) => { const source = nodesById.get(edge.source); const target = nodesById.get(edge.target); if (!source || !target) return null; return <line key={edge.id} x1={source.x * 1000} y1={source.y * 620} x2={target.x * 1000} y2={target.y * 620} />; })}</g>}
+        {props.layers.network && <g className="edge-layer">{props.graph.edges.map((edge) => {
+          const source = nodesById.get(edge.source);
+          const target = nodesById.get(edge.target);
+          if (!source || !target) return null;
+          const selected = edge.id === props.selectedEdgeId;
+          const selectEdge = () => {
+            if (props.editable) props.onSelectEdge?.(edge.id);
+          };
+          return (
+            <g
+              key={edge.id}
+              className={`map-edge ${selected ? "selected" : ""}`}
+              role={props.editable ? "button" : undefined}
+              tabIndex={props.editable ? 0 : undefined}
+              aria-label={props.editable ? `Directed link from ${source.label} to ${target.label}` : undefined}
+              onClick={(event) => { event.stopPropagation(); selectEdge(); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  selectEdge();
+                }
+              }}
+            >
+              {props.editable && <line className="edge-hit" x1={source.x * 1000} y1={source.y * 620} x2={target.x * 1000} y2={target.y * 620} />}
+              <line className="edge-visual" markerEnd={props.editable ? "url(#edge-arrow)" : undefined} x1={source.x * 1000} y1={source.y * 620} x2={target.x * 1000} y2={target.y * 620} />
+            </g>
+          );
+        })}</g>}
         {props.layers.routes && !props.editable && <g className="route-layer">{props.graph.edges.filter((edge, index) => routeEdgeIds.size > 0 ? routeEdgeIds.has(edge.id) : index < 6).map((edge) => { const source = nodesById.get(edge.source); const target = nodesById.get(edge.target); if (!source || !target) return null; return <line key={edge.id} x1={source.x * 1000} y1={source.y * 620} x2={target.x * 1000} y2={target.y * 620} />; })}</g>}
         {props.layers.crowd && !props.editable && <g className="crowd-layer">{props.graph.nodes.flatMap((node, nodeIndex) => { const count = Math.max(1, Math.min(9, Math.round(scoreForNode(node, nodeIndex) * 9))); return Array.from({ length: count }, (_, index) => { const angle = nodeIndex * 1.8 + index * 1.25; const radius = 12 + index * 5; return <rect key={`${node.id}-${index}`} x={node.x * 1000 + Math.cos(angle) * radius - 3} y={node.y * 620 + Math.sin(angle) * radius - 3} width="6" height="6" />; }); })}</g>}
         <g className="node-layer">{props.graph.nodes.map((node, index) => { const score = scoreForNode(node, index); const selected = node.id === props.selectedNodeId; return (
@@ -684,7 +890,7 @@ function LiveScreen(props: LiveProps) {
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState<1 | 2 | 4>(1);
   const [layers, setLayers] = useState<LayerState>(DEFAULT_LAYERS);
-  const [adviceApplied, setAdviceApplied] = useState(false);
+  const [appliedPolicy, setAppliedPolicy] = useState<ReroutePolicyView | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(props.initialSnapshot);
   const [advice, setAdvice] = useState<AdviceResponse | null>(null);
@@ -775,12 +981,12 @@ function LiveScreen(props: LiveProps) {
         }
         const result = await api.applyReroute(props.sessionId, selected.policy.id);
         setSnapshot(result.snapshot);
+        setAppliedPolicy(result.evaluation.policy);
       } catch (error) {
         setLiveMessage(error instanceof Error ? error.message : "The reroute could not be applied.");
         return;
       }
     }
-    setAdviceApplied(true);
     setPreviewing(false);
     setLiveMessage("Reroute applied to this simulation. Predicted pressure is recalculating.");
   };
@@ -857,11 +1063,12 @@ function LiveScreen(props: LiveProps) {
 
           <section className="ops-panel advice-panel">
             <div className="advisor-tag"><span>AI</span> REROUTE ADVISOR</div>
-            <h2>{adviceApplied ? "Intervention active" : advice?.actions?.[0]?.summary ?? "Divert arrivals from the pressure zone"}</h2>
-            <p>{adviceApplied ? "The alternate route is applied to the simulation. Compare density changes before operational use." : advice?.actions?.[0]?.rationale ?? `${topRisk?.node.label ?? "The lead hotspot"} is trending above its safe operating band. Preview a lower-cost path and reduce inflow.`}</p>
-            <div className="advice-route"><span>FINDING<strong>{citedFindingLabel ?? snapshot?.bottlenecks[0]?.label ?? "Lead hotspot"}</strong></span><i>→</i><span>ACTION<strong>{advice?.actions?.[0]?.type.replaceAll("_", " ") ?? "Reroute"}</strong></span><i>→</i><span>STATUS<strong>{advice && !recommendedReroute ? "No benefit" : advice?.provider === "openai" ? "GPT grounded" : "Awaiting preview"}</strong></span></div>
+            <h2>{appliedPolicy ? `Applied: ${appliedPolicy.label}` : previewing && previewReroute ? `Preview: ${previewReroute.policy.label}` : advice && !recommendedReroute ? "No beneficial simulator policy" : "Evaluate a simulator reroute"}</h2>
+            <p>{appliedPolicy ? `Policy ${appliedPolicy.id} is active in this simulation. Compare density changes before operational use.` : previewReroute ? `Review the simulator-tested ${previewReroute.policy.label} policy and its counterfactual impact before applying it.` : `${topRisk?.node.label ?? "The lead hotspot"} is trending above its safe operating band. Preview a simulator-tested alternative.`}</p>
+            <div className="advice-route"><span>FINDING<strong>{citedFindingLabel ?? snapshot?.bottlenecks[0]?.label ?? "Lead hotspot"}</strong></span><i>→</i><span>POLICY<strong>{appliedPolicy?.label ?? previewReroute?.policy.label ?? "Awaiting evaluation"}</strong></span><i>→</i><span>STATUS<strong>{appliedPolicy ? "Applied" : advice && !recommendedReroute ? "No benefit" : previewReroute ? "Recommended" : "Preview required"}</strong></span></div>
+            {advice?.actions?.[0] && <p className="ai-context"><strong>AI context:</strong> {advice.actions[0].summary} — {advice.actions[0].rationale}</p>}
             <div className="impact-row"><span><small>PEAK Δ</small><strong>{previewReroute ? `${previewReroute.metrics.peakOccupancyRatioDelta >= 0 ? "+" : ""}${(previewReroute.metrics.peakOccupancyRatioDelta * 100).toFixed(1)}pt` : "--"}</strong></span><span><small>EXPOSURE Δ</small><strong>{previewReroute ? `${previewReroute.metrics.congestionExposureDeltaPersonMinutes >= 0 ? "+" : ""}${Math.round(previewReroute.metrics.congestionExposureDeltaPersonMinutes)}pm` : "--"}</strong></span><span><small>EXITS Δ</small><strong>{previewReroute ? `${previewReroute.metrics.exitedPeopleDelta >= 0 ? "+" : ""}${Math.round(previewReroute.metrics.exitedPeopleDelta)}` : "--"}</strong></span><span><small>CONFIDENCE</small><strong>{advice?.confidence ? `${Math.round(advice.confidence * 100)}%` : "--"}</strong></span></div>
-            <div className="advice-actions"><button type="button" className="secondary-button" onClick={togglePreview}>{previewing ? "HIDE PREVIEW" : "PREVIEW ON MAP"}</button><button type="button" className="primary-button small" disabled={adviceApplied || !previewing || !recommendedReroute} onClick={applyAdvice}>{adviceApplied ? "APPLIED ✓" : advice && !recommendedReroute ? "NO SAFE BENEFIT" : "APPLY TO SIM"}</button></div>
+            <div className="advice-actions"><button type="button" className="secondary-button" onClick={togglePreview}>{previewing ? "HIDE PREVIEW" : "PREVIEW ON MAP"}</button><button type="button" className="primary-button small" disabled={Boolean(appliedPolicy) || !previewing || !recommendedReroute} onClick={applyAdvice}>{appliedPolicy ? "APPLIED ✓" : advice && !recommendedReroute ? "NO SAFE BENEFIT" : "APPLY POLICY"}</button></div>
             <p className="disclaimer">Decision support only. A venue operator must authorize any real-world intervention.</p>
           </section>
         </aside>
