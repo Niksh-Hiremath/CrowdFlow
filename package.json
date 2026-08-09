@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n web,api -c cyan,magenta \"vite --host 127.0.0.1\" \"tsx watch src/server/index.ts\"",
-    "build": "npm run typecheck && vite build && esbuild src/server/index.ts --bundle --platform=node --format=esm --outfile=dist/server/index.js --packages=external",
+    "build": "npm run typecheck && vite build && vite build --ssr src/server/index.ts --outDir dist/server",
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
