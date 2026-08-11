@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
@@ -17,6 +17,7 @@ from app.schemas.venue import (
 )
 from app.services.graph_builder import mark_confirmed, normalize_graph, validate_graph
 from app.services.hf_advisor import advise
+from app.services.hf_revise import revise_graph
 from app.services.hf_vlm import extract_layout
 from app.services.mock_venue import default_wedding_schedule
 from app.services.presets import load_preset
@@ -34,6 +35,11 @@ class ConfirmResponse(BaseModel):
 
 class ApplyActionsRequest(BaseModel):
     actions: list[AdvisorAction]
+
+
+class ReviseGraphRequest(BaseModel):
+    instruction: str = Field(min_length=1)
+    mode: str | None = None
 
 
 def _session_response(session_id: str) -> SessionResponse:
@@ -112,6 +118,22 @@ async def extract_session_layout(
     return graph
 
 
+@router.get("/{session_id}/layout/image")
+async def get_layout_image(session_id: str) -> Response:
+    try:
+        session = store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Session not found") from exc
+    if not session.image_bytes:
+        raise HTTPException(404, "No layout image for this session")
+    content_type = "image/png"
+    if session.image_bytes[:3] == b"\xff\xd8\xff":
+        content_type = "image/jpeg"
+    elif session.image_bytes[:4] == b"RIFF":
+        content_type = "image/webp"
+    return Response(content=session.image_bytes, media_type=content_type)
+
+
 @router.get("/{session_id}/graph")
 async def get_graph(session_id: str) -> VenueGraph:
     try:
@@ -131,6 +153,20 @@ async def put_graph(session_id: str, graph: VenueGraph) -> VenueGraph:
         raise HTTPException(404, "Session not found") from exc
     graph = normalize_graph(graph)
     graph.confirmed = False
+    session.graph = graph
+    session.confirmed = False
+    return graph
+
+
+@router.post("/{session_id}/graph/revise")
+async def revise_session_graph(session_id: str, body: ReviseGraphRequest) -> VenueGraph:
+    try:
+        session = store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Session not found") from exc
+    if session.graph is None:
+        raise HTTPException(400, "No graph to revise")
+    graph = await revise_graph(session.graph, body.instruction, force_mode=body.mode)
     session.graph = graph
     session.confirmed = False
     return graph
@@ -168,7 +204,10 @@ async def put_scenario(session_id: str, scenario: Scenario) -> Scenario:
 
 
 @router.post("/{session_id}/sim/start")
-async def start_sim(session_id: str) -> SimTick:
+async def start_sim(
+    session_id: str,
+    max_ticks: int = Query(default=90, ge=1, le=500),
+) -> SimTick:
     try:
         session = store.require(session_id)
     except KeyError as exc:
@@ -179,6 +218,7 @@ async def start_sim(session_id: str) -> SimTick:
         raise HTTPException(400, "Scenario required")
 
     engine = SimulationEngine(graph=session.graph, scenario=session.scenario)
+    engine.max_ticks = max_ticks
     engine.running = True
     tick = engine.step()
     session.engine = engine
@@ -251,15 +291,35 @@ async def sim_stream(websocket: WebSocket, session_id: str) -> None:
 
     settings = get_settings()
     try:
+        # Send current tick immediately if available
+        if session.last_tick is not None:
+            await websocket.send_json(session.last_tick.model_dump())
+            if session.engine and session.engine.finished:
+                await websocket.send_json(
+                    {"type": "done", "tick": session.last_tick.model_dump()}
+                )
+                return
+
         while True:
             if session.engine is None:
                 await websocket.send_json({"error": "Simulation not started"})
                 await asyncio.sleep(1)
                 continue
+            if session.engine.finished:
+                await websocket.send_json(
+                    {
+                        "type": "done",
+                        "tick": session.last_tick.model_dump() if session.last_tick else None,
+                    }
+                )
+                return
             if session.engine.running:
                 tick = session.engine.step()
                 session.last_tick = tick
                 await websocket.send_json(tick.model_dump())
-            await asyncio.sleep(settings.sim_dt_seconds / 5)
+                if session.engine.finished:
+                    await websocket.send_json({"type": "done", "tick": tick.model_dump()})
+                    return
+            await asyncio.sleep(max(0.05, settings.sim_dt_seconds / 5))
     except WebSocketDisconnect:
         return

@@ -16,3 +16,18 @@ services:
     volumes:
       - ./apps/api/data/cache:/app/data/cache
     restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        API_ORIGIN: http://api:8000
+    ports:
+      - "3000:3000"
+    environment:
+      API_ORIGIN: http://api:8000
+      NEXT_PUBLIC_API_WS: ws://127.0.0.1:8000/api/sessions/{id}/sim/stream
+    depends_on:
+      - api
+    restart: unless-stopped

@@ -16,7 +16,7 @@ from app.services.mock_venue import banquet_hall_graph
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a venue layout extraction engine for crowd-flow simulation.
-Given a top-down floorplan image, extract key circulation entities as JSON only.
+Given a top-down floorplan or transit-station map, extract key circulation entities as JSON only.
 
 Output ONLY valid JSON with this schema:
 {
@@ -39,11 +39,12 @@ Output ONLY valid JSON with this schema:
 Rules:
 - Coordinates x,y are normalized 0..1 (origin top-left of the image).
 - Always include at least one entry_gate and one exit or emergency_exit.
-- Include walkway_junction nodes for major aisles so the graph is connected.
-- Map kitchens/bars/buffets to concession or service; dance floors/stages/head tables to attraction; table clusters to seating; toilets to restroom.
+- Include walkway_junction nodes for major aisles/passages so the graph is connected.
+- Prefer 8–18 nodes total. For transit stations: concourse, major passages, ticket areas, retail clusters, platform access junctions, and street exits — do NOT create one node per track.
+- Map retail/food to concession; toilets to restroom; ticket halls/booths to service; platforms/shed access to attraction or walkway_junction; street doors to entry_gate/exit.
 - Do NOT invent rooms that are absent. Prefer fewer correct nodes over many wrong ones.
 - Connect nodes with walkway edges along plausible circulation paths.
-- Capacities: entries 80-120, seating clusters 80-200, concessions 30-50, restrooms 20-40, dance floor 80-150.
+- Capacities: entries/exits 100-200, concourse hubs 200-400, passages 80-150, retail 40-80, restrooms 20-40.
 """
 
 
@@ -131,8 +132,9 @@ async def extract_layout(
                         {
                             "type": "text",
                             "text": (
-                                "Extract venue nodes and walkway edges for crowd simulation "
-                                "from this top-down floorplan. Return JSON only."
+                                "Extract 8–18 major circulation nodes and walkway edges for crowd "
+                                "simulation from this top-down map (hall, station, or venue). "
+                                "Skip per-track detail. Return compact JSON only — no markdown."
                             ),
                         },
                         {
@@ -142,11 +144,17 @@ async def extract_layout(
                     ],
                 },
             ],
-            max_tokens=2048,
+            max_tokens=4096,
             temperature=0.1,
         )
         content = completion.choices[0].message.content or "{}"
-        payload = _parse_json_loose(content)
+        try:
+            payload = _parse_json_loose(content)
+        except Exception:
+            # Persist raw model output for debugging truncated JSON, then re-raise
+            debug_path = settings.cache_dir / f"extract_{cache_key}.raw.txt"
+            debug_path.write_text(content, encoding="utf-8")
+            raise
         cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         graph = _graph_from_payload(payload, width, height, source="hf")
         if len(graph.nodes) < 3:

@@ -2,7 +2,7 @@
 
 Hackathon project for **AI Race Month · Problem Statement 3**: simulate crowd movement in a venue, detect bottlenecks, and recommend reroutes — with **Hugging Face** as the mandatory intelligent core.
 
-**Current focus:** backend only (`apps/api`). Next.js frontend is deferred.
+**Apps:** FastAPI backend (`apps/api`) + Next.js UI (`apps/web`).
 
 ## What it does
 
@@ -71,31 +71,47 @@ Honest positioning: hackathon-grade macroscopic crowd ops, not certified pedestr
 |---|---|
 | Hugging Face | Layout perception + natural-language / structured operator advice |
 | FastAPI + Python | Orchestration, graph, sim physics, bottleneck rules, pathfinding |
-| Frontend (later) | Upload UI, visual node confirm, live map |
+| Frontend (`apps/web`) | Setup → graph review modal → live overlay sim + findings report |
 
 ## Repo layout
 
 ```text
 GrandPrix/
-├── apps/api/           # FastAPI backend (primary)
+├── apps/api/           # FastAPI backend
+├── apps/web/           # Next.js UI
 ├── docs/ARCHITECTURE.md
 ├── docker-compose.yml
-├── test-concert.png    # sample concert layout
-└── test-floorplan.jpg  # sample banquet layout
+├── test-concert.png
+└── test-floorplan.jpg
 ```
 
-## Quick start
+## Quick start (UI + API)
+
+**API**
 
 ```bash
 cd apps/api
 python -m venv .venv
-# Windows
 .venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
+uvicorn app.main:app --reload --port 8000
 ```
 
-Put your Hugging Face token in `.env` (never commit `.env`):
+**Web** (separate terminal)
+
+```bash
+cd apps/web
+npm install
+copy .env.example .env.local
+npm run dev
+```
+
+Open http://localhost:3000 — use **Try this layout** for a mock-friendly demo (`EXTRACT_MODE=mock` / `ADVISOR_MODE=mock` in API `.env`).
+
+UI flow: setup → extract review modal (chat + drag nodes) → sim page (live red hotspots + findings report).
+
+Put your Hugging Face token in `apps/api/.env` for live models (never commit `.env`):
 
 ```env
 HF_TOKEN=hf_...
@@ -106,14 +122,8 @@ HF_LLM_MODEL=Qwen/Qwen3-4B-Instruct-2507
 HF_PROVIDER=featherless-ai
 ```
 
-Run:
-
-```bash
-uvicorn app.main:app --reload --port 8000
-```
-
+- App: http://localhost:3000  
 - API docs: http://127.0.0.1:8000/docs  
-- Health: http://127.0.0.1:8000/api/health  
 
 Or from repo root:
 

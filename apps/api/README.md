@@ -17,13 +17,17 @@ Provider default: `featherless-ai` (HF Inference Providers).
 
 ```text
 POST /layout/extract  →  Qwen3-VL (+ cache)  →  VenueGraph
+GET  /layout/image    →  stored floorplan bytes
+POST /graph/revise    →  text-LLM / mock instruction → updated graph
 POST /graph/confirm   →  validate entry/exit connectivity
 PUT  /scenario        →  crowd size + schedule blocks
-POST /sim/start|tick  →  macroscopic flow + bottlenecks + routes
-WS   /sim/stream      →  live ticks
+POST /sim/start?max_ticks=N → macroscopic flow
+WS   /sim/stream      →  live ticks then {type:done}
 POST /advise          →  Qwen3-4B JSON actions
 POST /actions/apply   →  mutate gate meters / avoid-prefer → re-sim
 ```
+
+Frontend UI lives in `apps/web` (Next.js).
 
 ### Local algorithms
 

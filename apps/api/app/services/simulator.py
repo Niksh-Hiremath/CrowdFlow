@@ -42,6 +42,9 @@ class SimulationEngine:
     avoid: list[str] = field(default_factory=list)
     prefer: list[str] = field(default_factory=list)
     running: bool = False
+    max_ticks: int | None = None
+    ticks_done: int = 0
+    finished: bool = False
 
     def __post_init__(self) -> None:
         self.reset()
@@ -61,6 +64,8 @@ class SimulationEngine:
         self.avoid = []
         self.prefer = []
         self.running = False
+        self.ticks_done = 0
+        self.finished = False
 
     def active_blocks(self) -> list:
         out = []
@@ -255,6 +260,11 @@ class SimulationEngine:
             avoid=[a for a in self.avoid if a in node_ids],
             prefer=[p for p in self.prefer if p in node_ids],
         )
+
+        self.ticks_done += 1
+        if self.max_ticks is not None and self.ticks_done >= self.max_ticks:
+            self.running = False
+            self.finished = True
 
         return SimTick(
             t=round(self.t, 2),
