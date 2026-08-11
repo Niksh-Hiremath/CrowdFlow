@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "fastapi": {
+      "source": "fastapi/fastapi",
+      "sourceType": "github",
+      "skillPath": "fastapi/.agents/skills/fastapi/SKILL.md",
+      "computedHash": "187b2e06c41cdb6c6beeab15e6db4aeb1bf62f57735974646ad5646af8aacc66"
+    },
+    "fastapi-templates": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/api-scaffolding/skills/fastapi-templates/SKILL.md",
+      "computedHash": "e28ca940d4a3a85eaa9150f0d4c0cc36c16de33368963b7f9da5875842b328b4"
+    },
+    "hf-cli": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/hf-cli/SKILL.md",
+      "computedHash": "4e9424f5354b0b0b82c55c36a50625cbc93d9464642a47ae71737375dc65710a"
+    },
+    "huggingface-best": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-best/SKILL.md",
+      "computedHash": "31eeb3a90dc9562122929138784c065998defa8f6985a759f04b09e8873a4520"
+    },
+    "huggingface-local-models": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-local-models/SKILL.md",
+      "computedHash": "3cbaf709aa2712d7ec028d1a376557e49bdb37395708a7c152f95398eb0e4e5b"
+    },
+    "huggingface-spaces": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-spaces/SKILL.md",
+      "computedHash": "fcab17ea835b76b600fcb350ef426da614511a79a1c119f684ebe07068c0cdc2"
+    }
+  }
+}

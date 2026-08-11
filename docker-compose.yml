@@ -1,0 +1,18 @@
+services:
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./apps/api/.env
+    environment:
+      EXTRACT_MODE: ${EXTRACT_MODE:-mock}
+      ADVISOR_MODE: ${ADVISOR_MODE:-mock}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_VLM_MODEL: ${HF_VLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}
+      HF_LLM_MODEL: ${HF_LLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}
+    volumes:
+      - ./apps/api/data/cache:/app/data/cache
+    restart: unless-stopped
