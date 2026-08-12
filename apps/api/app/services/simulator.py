@@ -15,6 +15,8 @@ from app.schemas.venue import (
 )
 from app.services.bottlenecks import detect_bottlenecks
 from app.services.routing import suggest_routes
+from app.services.graph_builder import to_networkx
+import networkx as nx
 
 
 def _hhmm_to_min(value: str) -> int:
@@ -158,6 +160,15 @@ class SimulationEngine:
         transfers: dict[str, float] = {n.id: 0.0 for n in self.graph.nodes}
         edge_flows: dict[str, float] = {e.id: 0.0 for e in self.graph.edges}
 
+        # Compute global distance map from attractors using NetworkX
+        dist_map = {}
+        if attractors:
+            try:
+                nx_graph = to_networkx(self.graph)
+                dist_map = nx.multi_source_dijkstra_path_length(nx_graph, attractors, weight="length_m")
+            except Exception:
+                pass
+
         for node in self.graph.nodes:
             count = self.node_count[node.id]
             if count <= 0:
@@ -166,12 +177,20 @@ class SimulationEngine:
             if not neighbors:
                 continue
 
+            node_dist = dist_map.get(node.id, 999999.0)
+
             # Score neighbors
             scored: list[tuple[float, str, str, float, int]] = []
             for nb, eid, length, capacity in neighbors:
                 score = 1.0
                 if nb in attractors:
                     score += 3.0
+                
+                # Global routing: boost score heavily if neighbor is strictly closer to attractors
+                nb_dist = dist_map.get(nb, 999999.0)
+                if nb_dist < node_dist:
+                    score += 15.0
+
                 if nb in self.prefer:
                     score += 2.0
                 if nb in self.avoid or node.id in self.avoid:

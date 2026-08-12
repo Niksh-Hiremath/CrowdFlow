@@ -27,7 +27,8 @@ export const TRY_LAYOUTS: TryLayout[] = [
   {
     id: "banquet",
     title: "Banquet hall",
-    description: "Wedding / gala floorplan with aisles, buffet, and dance floor.",
+    description:
+      "A sprawling banquet and gala floorplan designed for weddings and large formal events. It features dedicated aisles, a central buffet area, and a spacious dance floor. This layout is ideal for simulating multi-phase events with distinct crowd movements during ceremonies, dinner service, and late-night dancing.",
     imageSrc: "/layouts/banquet.png",
     expectedCrowd: 400,
     blocks: [
@@ -41,7 +42,8 @@ export const TRY_LAYOUTS: TryLayout[] = [
   {
     id: "concert",
     title: "Concert theatre",
-    description: "Multi-tier seating with aisle junctions and pit access.",
+    description:
+      "A multi-tier concert theatre layout with intricate seating arrangements. The floorplan includes an orchestra section, parterre seating, and multiple aisle junctions leading to a stage pit. This layout is perfect for modeling dense crowd flows during ingress, intermission rushes to restrooms and concessions, and mass egress.",
     imageSrc: "/layouts/concert.png",
     expectedCrowd: 800,
     blocks: [

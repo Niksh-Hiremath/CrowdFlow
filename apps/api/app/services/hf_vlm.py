@@ -37,14 +37,14 @@ Output ONLY valid JSON with this schema:
 }
 
 Rules:
-- Coordinates x,y are normalized 0..1 (origin top-left of the image).
+- ACCURACY IS PARAMOUNT: Coordinates x,y are normalized 0..1 (origin top-left). You MUST place coordinates exactly in the visual center of each labeled room or distinct zone.
+- EXHAUSTIVE EXTRACTION: Do not skip any clearly labeled rooms. You MUST map every distinct functional room, corridor, and zone.
+- Prefer 15–35 nodes total to ensure comprehensive coverage of the entire floorplan.
 - Always include at least one entry_gate and one exit or emergency_exit.
-- Include walkway_junction nodes for major aisles/passages so the graph is connected.
-- Prefer 8–18 nodes total. For transit stations: concourse, major passages, ticket areas, retail clusters, platform access junctions, and street exits — do NOT create one node per track.
-- Map retail/food to concession; toilets to restroom; ticket halls/booths to service; platforms/shed access to attraction or walkway_junction; street doors to entry_gate/exit.
-- Do NOT invent rooms that are absent. Prefer fewer correct nodes over many wrong ones.
-- Connect nodes with walkway edges along plausible circulation paths.
-- Capacities: entries/exits 100-200, concourse hubs 200-400, passages 80-150, retail 40-80, restrooms 20-40.
+- Include walkway_junction nodes for aisles/passages so the entire graph is fully connected.
+- Map retail/food to concession; toilets to restroom; ticket halls to service; stages/platforms to attraction; doors to entry_gate/exit.
+- Connect adjacent nodes with walkway edges along plausible circulation paths, ensuring no node is isolated.
+- Capacities: entries/exits 100-200, hubs 200-400, passages 80-150, retail 40-80, restrooms 20-40.
 """
 
 

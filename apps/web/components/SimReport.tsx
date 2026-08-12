@@ -1,6 +1,7 @@
 "use client";
 
-import type { AdvisorResponse, SimTick } from "@/lib/types";
+import { useMemo } from "react";
+import type { AdvisorResponse, Scenario, SimTick, AdvisorAction } from "@/lib/types";
 
 interface Props {
   waiting: boolean;
@@ -8,16 +9,70 @@ interface Props {
   tick: SimTick | null;
   advice: AdvisorResponse | null;
   error?: string | null;
+  scenario: Scenario | null;
+  highlightedNodes: string[];
+  onHighlight: (nodeIds: string[]) => void;
+  onTimelineClick?: (timeStr: string) => void;
 }
 
-export default function SimReport({ waiting, progress, tick, advice, error }: Props) {
+export default function SimReport({
+  waiting,
+  progress,
+  tick,
+  advice,
+  error,
+  scenario,
+  highlightedNodes,
+  onHighlight,
+  onTimelineClick,
+}: Props) {
+  const currentBlockIndex = useMemo(() => {
+    if (!scenario || !tick) return -1;
+    const timeStr = tick.sim_time;
+    return scenario.schedule.blocks.findIndex((b) => timeStr >= b.start && timeStr < b.end);
+  }, [scenario, tick]);
+
+  function handleHighlightAction(action: AdvisorAction) {
+    const nodes = new Set<string>();
+    if (action.node_id) nodes.add(action.node_id);
+    if (action.from_node) nodes.add(action.from_node);
+    if (action.avoid) action.avoid.forEach((n) => nodes.add(n));
+    if (action.prefer) action.prefer.forEach((n) => nodes.add(n));
+    onHighlight(Array.from(nodes));
+  }
+
   return (
     <div className="panel sim-right">
+      {scenario && (
+        <div style={{ marginBottom: 24 }}>
+          <h2>Live Timeline</h2>
+          <div className="timeline-list">
+            {scenario.schedule.blocks.map((b, i) => {
+              const active = i === currentBlockIndex;
+              const past = i < currentBlockIndex;
+              return (
+                <div 
+                  key={b.id} 
+                  className={`timeline-block ${active ? "active" : ""} ${past ? "past" : ""} ${onTimelineClick ? "interactive-timeline" : ""}`}
+                  onClick={() => onTimelineClick?.(b.start)}
+                >
+                  <div className="timeline-marker"></div>
+                  <div className="timeline-content">
+                    <div className="timeline-time">{b.start}</div>
+                    <div className="timeline-label">{b.label}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <h2>Findings</h2>
       <p className="hint">
         {waiting
           ? "Waiting for the simulation to finish…"
-          : "Consolidated bottlenecks and operator advice from the latest run."}
+          : "Click on any bottleneck or recommendation below to highlight it on the map."}
       </p>
 
       {waiting && (
@@ -47,7 +102,12 @@ export default function SimReport({ waiting, progress, tick, advice, error }: Pr
             {tick && tick.bottlenecks.length > 0 ? (
               <ul className="report-list">
                 {tick.bottlenecks.map((b) => (
-                  <li key={b.id} className={`sev-${b.severity}`}>
+                  <li
+                    key={b.id}
+                    className={`sev-${b.severity} interactive-card ${highlightedNodes.includes(b.node_id) ? "highlighted" : ""}`}
+                    onClick={() => onHighlight([b.node_id])}
+                    style={{ cursor: "pointer" }}
+                  >
                     <strong>{b.node_id}</strong> · {b.severity}
                     <div className="muted">{b.reason}</div>
                   </li>
@@ -63,7 +123,12 @@ export default function SimReport({ waiting, progress, tick, advice, error }: Pr
             {advice.actions.length > 0 ? (
               <ul className="report-list">
                 {advice.actions.map((a, i) => (
-                  <li key={`${a.type}-${i}`}>
+                  <li
+                    key={`${a.type}-${i}`}
+                    className="interactive-card"
+                    onClick={() => handleHighlightAction(a)}
+                    style={{ cursor: "pointer" }}
+                  >
                     <strong>{a.type}</strong>
                     <div className="muted">
                       {[

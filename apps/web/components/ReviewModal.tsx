@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import VenueCanvas from "@/components/VenueCanvas";
+import NodeDetailsModal from "@/components/NodeDetailsModal";
 import { layoutImageUrl, putGraph, reviseGraph } from "@/lib/api";
 import type { VenueGraph, VenueNode } from "@/lib/types";
 
@@ -159,25 +160,6 @@ export default function ReviewModal({
           </div>
         </div>
 
-        {selected && (
-          <div className="inspector">
-            <div style={{ flex: 1, minWidth: 160 }}>
-              <label className="label">Selected node label</label>
-              <input
-                className="field"
-                value={selected.label}
-                onChange={(e) => void updateSelected({ label: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="label">Id</label>
-              <input className="field" value={selected.id} disabled />
-            </div>
-            <button type="button" className="btn btn-danger" onClick={() => void deleteSelected()}>
-              Delete node
-            </button>
-          </div>
-        )}
 
         <div className="chat-box">
           <label className="label">Ask the model to correct the graph</label>
@@ -218,6 +200,16 @@ export default function ReviewModal({
           </button>
         </div>
       </div>
+      
+      {selected && (
+        <NodeDetailsModal
+          node={selected}
+          imageUrl={imageUrl}
+          onClose={() => setSelectedId(null)}
+          onUpdate={updateSelected}
+          onDelete={deleteSelected}
+        />
+      )}
     </div>
   );
 }

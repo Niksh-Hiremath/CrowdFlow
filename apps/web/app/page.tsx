@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReviewModal from "@/components/ReviewModal";
+import LayoutPreviewModal from "@/components/LayoutPreviewModal";
 import ScheduleEditor from "@/components/ScheduleEditor";
 import TryThisLayouts from "@/components/TryThisLayouts";
 import {
@@ -19,6 +20,7 @@ export default function SetupPage() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLayoutId, setPreviewLayoutId] = useState<TryLayoutId | null>(null);
   const [selectedTry, setSelectedTry] = useState<TryLayoutId | null>(null);
   const [crowd, setCrowd] = useState(400);
   const [blocks, setBlocks] = useState<ScheduleBlock[]>(TRY_LAYOUTS[0].blocks);
@@ -75,6 +77,19 @@ export default function SetupPage() {
 
   async function onConfirm() {
     if (!sessionId || !graph) return;
+    
+    // Calculate total event duration to prevent early stopping
+    let totalTicks = 90;
+    if (blocks.length > 0) {
+      const first = blocks[0].start;
+      const last = blocks[blocks.length - 1].end;
+      const [h1, m1] = first.split(":").map(Number);
+      const [h2, m2] = last.split(":").map(Number);
+      let diff = (h2 * 60 + m2) - (h1 * 60 + m1);
+      if (diff < 0) diff += 24 * 60; // Handle midnight crossover
+      totalTicks = Math.min(500, Math.max(1, diff));
+    }
+    
     setConfirming(true);
     setError(null);
     try {
@@ -89,7 +104,7 @@ export default function SetupPage() {
         setConfirming(false);
         return;
       }
-      await startSim(sessionId, 90);
+      await startSim(sessionId, totalTicks);
       router.push(`/sim/${sessionId}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start simulation");
@@ -113,7 +128,7 @@ export default function SetupPage() {
         <section className="panel">
           <h2>Try this layout</h2>
           <p className="hint">Load a sample floorplan with a sensible crowd size and schedule.</p>
-          <TryThisLayouts selectedId={selectedTry} onSelect={(id) => void selectTry(id)} />
+          <TryThisLayouts selectedId={selectedTry} onPreview={setPreviewLayoutId} />
         </section>
 
         <div className="grid-2">
@@ -180,6 +195,21 @@ export default function SetupPage() {
           error={error}
         />
       )}
+
+      {previewLayoutId && (() => {
+        const layout = TRY_LAYOUTS.find((l) => l.id === previewLayoutId);
+        if (!layout) return null;
+        return (
+          <LayoutPreviewModal
+            layout={layout}
+            onClose={() => setPreviewLayoutId(null)}
+            onSelect={() => {
+              void selectTry(previewLayoutId);
+              setPreviewLayoutId(null);
+            }}
+          />
+        );
+      })()}
     </main>
   );
 }
