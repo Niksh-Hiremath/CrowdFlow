@@ -59,6 +59,10 @@ def suggest_routes(
     node_ids = set(g.nodes)
     entries = [n.id for n in graph.nodes if n.type == NodeType.entry_gate and n.id in node_ids]
     exits = [n.id for n in graph.nodes if n.type in EXIT_TYPES and n.id in node_ids]
+    if not exits:
+        # An unlabeled exterior entry door may be the only known bidirectional
+        # ingress/egress point in the floorplan.
+        exits = entries
     attractors = [
         a
         for a in (

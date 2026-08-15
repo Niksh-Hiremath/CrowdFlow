@@ -4,11 +4,18 @@ import { useMemo, useState, type FormEvent } from "react";
 import VenueCanvas from "@/components/VenueCanvas";
 import NodeDetailsModal from "@/components/NodeDetailsModal";
 import { layoutImageUrl, putGraph, reviseGraph } from "@/lib/api";
-import type { VenueGraph, VenueNode } from "@/lib/types";
+import type { RevisionProgress, VenueEdge, VenueGraph, VenueNode } from "@/lib/types";
 
 interface ChatLine {
   role: "user" | "system";
   text: string;
+}
+
+function graphSignature(graph: VenueGraph): string {
+  return JSON.stringify({
+    nodes: [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)),
+    edges: [...graph.edges].sort((a, b) => a.id.localeCompare(b.id)),
+  });
 }
 
 interface Props {
@@ -31,9 +38,13 @@ export default function ReviewModal({
   error,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [addEdgeStartId, setAddEdgeStartId] = useState<string | null>(null);
+  const [addingEdge, setAddingEdge] = useState(false);
   const [instruction, setInstruction] = useState("");
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [busy, setBusy] = useState(false);
+  const [revisionProgress, setRevisionProgress] = useState<RevisionProgress | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const selected = useMemo(
@@ -42,6 +53,68 @@ export default function ReviewModal({
   );
 
   const imageUrl = layoutImageUrl(sessionId);
+
+  const selectedEdge = useMemo(
+    () => graph.edges.find((edge) => edge.id === selectedEdgeId) || null,
+    [graph.edges, selectedEdgeId],
+  );
+
+  function toggleAddEdge() {
+    setAddingEdge((active) => !active);
+    setAddEdgeStartId(null);
+    setSelectedId(null);
+    setSelectedEdgeId(null);
+  }
+
+  function selectNodeForEdge(nodeId: string) {
+    if (!addingEdge) {
+      setSelectedId(nodeId);
+      return;
+    }
+    if (!addEdgeStartId) {
+      setAddEdgeStartId(nodeId);
+      return;
+    }
+    if (addEdgeStartId === nodeId) return;
+
+    const source = graph.nodes.find((node) => node.id === addEdgeStartId);
+    const target = graph.nodes.find((node) => node.id === nodeId);
+    if (!source || !target) return;
+
+    const alreadyExists = graph.edges.some(
+      (edge) =>
+        (edge.source === source.id && edge.target === target.id) ||
+        (edge.source === target.id && edge.target === source.id),
+    );
+    if (alreadyExists) {
+      setLocalError("Those nodes are already connected.");
+      setAddEdgeStartId(null);
+      return;
+    }
+
+    const edgeIdBase = `edge_${graph.edges.length + 1}`;
+    let edgeId = edgeIdBase;
+    let suffix = 2;
+    while (graph.edges.some((edge) => edge.id === edgeId)) {
+      edgeId = `${edgeIdBase}_${suffix++}`;
+    }
+    const edge: VenueEdge = {
+      id: edgeId,
+      source: source.id,
+      target: target.id,
+      type: "walkway",
+      length_m: Math.max(2, Math.hypot(source.x - target.x, source.y - target.y) * 40),
+      width_m: 3,
+      capacity: 80,
+    };
+    const next: VenueGraph = { ...graph, edges: [...graph.edges, edge], confirmed: false };
+    setAddEdgeStartId(null);
+    setLocalError(null);
+    onGraphChange(next);
+    void persist(next).catch((error) => {
+      setLocalError(error instanceof Error ? error.message : "Failed to add edge");
+    });
+  }
 
   async function persist(next: VenueGraph) {
     const saved = await putGraph(sessionId, next);
@@ -98,22 +171,56 @@ export default function ReviewModal({
     }
   }
 
+  async function deleteSelectedEdge() {
+    if (!selectedEdge) return;
+    const next: VenueGraph = {
+      ...graph,
+      edges: graph.edges.filter((edge) => edge.id !== selectedEdge.id),
+      confirmed: false,
+    };
+    setSelectedEdgeId(null);
+    onGraphChange(next);
+    try {
+      await persist(next);
+      setChat((c) => [...c, { role: "system", text: `Deleted edge ${selectedEdge.id}.` }]);
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : "Failed to delete edge");
+    }
+  }
+
   async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = instruction.trim();
     if (!text || busy) return;
     setBusy(true);
     setLocalError(null);
+    setRevisionProgress({
+      session_id: sessionId,
+      status: "queued",
+      progress: 0,
+      stage: "Submitting graph correction",
+      error: null,
+      graph: null,
+    });
     setChat((c) => [...c, { role: "user", text }]);
     setInstruction("");
+    const previousGraph = graph;
     try {
-      const revised = await reviseGraph(sessionId, text);
+      const revised = await reviseGraph(sessionId, text, setRevisionProgress);
       onGraphChange(revised);
-      setChat((c) => [...c, { role: "system", text: "Graph updated from your instruction." }]);
+      const changed = graphSignature(previousGraph) !== graphSignature(revised);
+      setChat((c) => [
+        ...c,
+        {
+          role: "system",
+          text: changed ? "Graph updated from your instruction." : "No graph changes were made.",
+        },
+      ]);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : "Revise failed");
     } finally {
       setBusy(false);
+      setRevisionProgress(null);
     }
   }
 
@@ -147,16 +254,41 @@ export default function ReviewModal({
             </div>
             <p className="canvas-caption">Original layout</p>
           </div>
-          <div onPointerUp={() => void commitMove()}>
+          <div>
             <VenueCanvas
               imageUrl={imageUrl}
               graph={graph}
               mode="review"
-              selectedNodeId={selectedId}
-              onSelectNode={setSelectedId}
+              selectedNodeId={addingEdge ? addEdgeStartId : selectedId}
+              selectedEdgeId={selectedEdgeId}
+              onSelectNode={(nodeId) => {
+                if (!addingEdge) setSelectedId(nodeId);
+              }}
+              onNodeClick={selectNodeForEdge}
+              onSelectEdge={setSelectedEdgeId}
               onMoveNode={onMoveNode}
+              onMoveEnd={() => void commitMove()}
             />
-            <p className="canvas-caption">Extracted graph overlay — drag nodes to reposition</p>
+            <div className="actions-row" style={{ justifyContent: "space-between", marginTop: 8 }}>
+              <p className="canvas-caption" style={{ margin: 0 }}>
+                {addingEdge
+                  ? addEdgeStartId
+                    ? "Select the second node to create the edge."
+                    : "Select the first node to create an edge."
+                  : "Extracted graph overlay — drag nodes to reposition"}
+              </p>
+              <button type="button" className="btn btn-secondary" onClick={toggleAddEdge}>
+                {addingEdge ? "Cancel" : "Add edge"}
+              </button>
+            </div>
+            {selectedEdge && (
+              <div className="actions-row" style={{ justifyContent: "space-between", marginTop: 10 }}>
+                <span className="canvas-caption">Selected edge: {selectedEdge.id}</span>
+                <button type="button" className="btn btn-danger" onClick={() => void deleteSelectedEdge()}>
+                  Delete edge
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -187,6 +319,24 @@ export default function ReviewModal({
               {busy ? "Updating…" : "Send"}
             </button>
           </form>
+          {busy && revisionProgress && (
+            <div className="revision-progress" aria-live="polite">
+              <div className="extraction-progress-header">
+                <strong>Updating graph</strong>
+                <span>{revisionProgress.progress}%</span>
+              </div>
+              <div
+                className="progress extraction-progress-bar"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={revisionProgress.progress}
+              >
+                <span style={{ width: `${revisionProgress.progress}%` }} />
+              </div>
+              <p className="hint extraction-progress-stage">{revisionProgress.stage}</p>
+            </div>
+          )}
         </div>
 
         <div className="actions-row">

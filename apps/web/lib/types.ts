@@ -26,6 +26,7 @@ export interface VenueNode {
   capacity: number;
   service_rate_per_min?: number | null;
   confirmed?: boolean;
+  bidirectional?: boolean;
 }
 
 export interface VenueEdge {
@@ -129,5 +130,25 @@ export interface SimTick {
 export interface ConfirmResponse {
   ok: boolean;
   errors: string[];
+  graph: VenueGraph | null;
+}
+
+export type ExtractionStatus = "idle" | "queued" | "running" | "completed" | "failed";
+
+export interface ExtractionProgress {
+  session_id: string;
+  status: ExtractionStatus;
+  progress: number;
+  stage: string;
+  error: string | null;
+  graph: VenueGraph | null;
+}
+
+export interface RevisionProgress {
+  session_id: string;
+  status: ExtractionStatus;
+  progress: number;
+  stage: string;
+  error: string | null;
   graph: VenueGraph | null;
 }

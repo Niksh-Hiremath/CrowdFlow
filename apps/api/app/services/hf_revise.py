@@ -13,21 +13,26 @@ from app.services.hf_advisor import _parse_json_loose
 
 logger = logging.getLogger(__name__)
 
-REVISE_SYSTEM = """You revise a venue crowd-flow graph JSON based on a user instruction.
+REVISE_SYSTEM = """You are a precise graph editor. Modify an existing crowd-flow graph according to one explicit user instruction.
 Return ONLY valid JSON for the full updated graph with this shape:
 {
   "image_size": {"width": number, "height": number},
-  "nodes":[{"id","type","label","x","y","capacity","service_rate_per_min","confirmed"}],
+  "nodes":[{"id","type","label","x","y","capacity","service_rate_per_min","confirmed","bidirectional"}],
   "edges":[{"id","source","target","type","length_m","width_m","capacity"}],
   "confirmed": false,
   "source": "manual"
 }
 Rules:
-- Keep coordinates x,y in [0,1].
+- Apply only the requested operation. Do not reinterpret the entire layout or make unrelated improvements.
+- Preserve every node and edge that the instruction does not mention, including IDs, coordinates, labels, and metadata.
+- For delete/remove, delete only the named item and any edges attached to a deleted node.
+- For rename, change only the requested label.
+- For add edge, connect only the requested existing nodes and use a unique edge ID.
+- For move, change only the requested node coordinates and keep them in [0,1].
+- If the instruction is ambiguous or cannot be matched to an existing item, return the graph unchanged.
+- Do not invent rooms, exits, junctions, edges, or semantic labels.
 - Use only node types: entry_gate, exit, emergency_exit, walkway_junction, concession, seating, attraction, restroom, service, other.
 - Edge type: walkway | corridor | queue.
-- Preserve nodes/edges the user did not ask to change.
-- Ensure entries and exits remain connected via edges when possible.
 - Node ids must be unique; edge source/target must reference existing node ids.
 """
 
@@ -112,7 +117,7 @@ async def revise_graph(
         from huggingface_hub import InferenceClient
 
         provider = None if settings.hf_provider in {"", "auto"} else settings.hf_provider
-        client = InferenceClient(token=settings.hf_token, provider=provider)
+        client = InferenceClient(token=settings.hf_token, provider=provider, timeout=120)
         completion = client.chat.completions.create(
             model=settings.hf_llm_model,
             messages=[

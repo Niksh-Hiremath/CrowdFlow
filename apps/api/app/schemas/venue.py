@@ -28,6 +28,7 @@ class VenueNode(BaseModel):
     capacity: int = Field(default=40, ge=1)
     service_rate_per_min: float | None = None
     confirmed: bool = False
+    bidirectional: bool = False
 
 
 class VenueEdge(BaseModel):
@@ -153,3 +154,21 @@ class SessionResponse(BaseModel):
     confirmed: bool = False
     sim_running: bool = False
     last_tick: SimTick | None = None
+
+
+class ExtractionStatusResponse(BaseModel):
+    session_id: str
+    status: Literal["idle", "queued", "running", "completed", "failed"]
+    progress: int = Field(ge=0, le=100)
+    stage: str = ""
+    error: str | None = None
+    graph: VenueGraph | None = None
+
+
+class RevisionStatusResponse(BaseModel):
+    session_id: str
+    status: Literal["idle", "queued", "running", "completed", "failed"]
+    progress: int = Field(ge=0, le=100)
+    stage: str = ""
+    error: str | None = None
+    graph: VenueGraph | None = None

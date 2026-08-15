@@ -87,7 +87,12 @@ def validate_graph(graph: VenueGraph) -> list[str]:
     exits = [n for n in graph.nodes if n.type in EXIT_TYPES]
     if not entries:
         errors.append("Need at least one entry_gate")
-    if not exits:
+    # A visible unlabeled exterior door is represented as an entry_gate and
+    # can be used in both directions when no separate exit is identifiable.
+    # Do not force extraction to invent a second exit node.
+    if not exits and entries:
+        exits = entries
+    elif not exits:
         errors.append("Need at least one exit or emergency_exit")
 
     g = to_networkx(graph)

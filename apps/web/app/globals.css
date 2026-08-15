@@ -426,7 +426,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
-  background: #000000;
+  background: #ffffff;
   position: relative;
   aspect-ratio: 16 / 10;
 }
@@ -441,8 +441,8 @@ button {
 
 .canvas-frame img {
   object-fit: contain;
-  filter: invert(1) hue-rotate(180deg) brightness(1.2);
-  opacity: 0.85;
+  filter: none;
+  opacity: 1;
 }
 
 .canvas-caption {
@@ -521,6 +521,19 @@ button {
   font-size: 1.25rem;
 }
 
+.speed-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.speed-controls .btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(255, 92, 38, 0.1);
+}
+
 .progress {
   height: 8px;
   background: #e7edf4;
@@ -534,6 +547,32 @@ button {
   height: 100%;
   background: linear-gradient(90deg, #7aa2c9, var(--accent));
   transition: width 0.2s ease;
+}
+
+.extraction-progress-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.extraction-progress-header {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink);
+}
+
+.extraction-progress-bar {
+  margin: 0;
+}
+
+.extraction-progress-stage {
+  margin: 0;
+}
+
+.revision-progress {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .report-list {
@@ -776,4 +815,3 @@ button {
   border-color: #ff9933;
   color: #ff9933;
 }
-

@@ -16,6 +16,14 @@ class Session:
     engine: SimulationEngine | None = None
     last_tick: SimTick | None = None
     confirmed: bool = False
+    extraction_status: str = "idle"
+    extraction_progress: int = 0
+    extraction_stage: str = ""
+    extraction_error: str | None = None
+    revision_status: str = "idle"
+    revision_progress: int = 0
+    revision_stage: str = ""
+    revision_error: str | None = None
 
 
 class SessionStore:

@@ -14,7 +14,7 @@ import {
   startSim,
 } from "@/lib/api";
 import { TRY_LAYOUTS, type TryLayoutId } from "@/lib/presets";
-import type { ScheduleBlock, VenueGraph } from "@/lib/types";
+import type { ExtractionProgress, ScheduleBlock, VenueGraph } from "@/lib/types";
 
 export default function SetupPage() {
   const router = useRouter();
@@ -25,6 +25,7 @@ export default function SetupPage() {
   const [crowd, setCrowd] = useState(400);
   const [blocks, setBlocks] = useState<ScheduleBlock[]>(TRY_LAYOUTS[0].blocks);
   const [extracting, setExtracting] = useState(false);
+  const [extractionProgress, setExtractionProgress] = useState<ExtractionProgress | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -61,17 +62,26 @@ export default function SetupPage() {
     if (!file || !canRun) return;
     setExtracting(true);
     setError(null);
+    setExtractionProgress({
+      session_id: "",
+      status: "queued",
+      progress: 0,
+      stage: "Uploading layout",
+      error: null,
+      graph: null,
+    });
     try {
       const session = await createSession();
       const sid = session.session_id;
       setSessionId(sid);
-      const extracted = await extractLayout(sid, file, file.name);
+      const extracted = await extractLayout(sid, file, file.name, setExtractionProgress);
       setGraph(extracted);
       setReviewOpen(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Extract failed");
     } finally {
       setExtracting(false);
+      setExtractionProgress(null);
     }
   }
 
@@ -123,6 +133,19 @@ export default function SetupPage() {
       </header>
 
       {error && !reviewOpen && <div className="banner banner-error">{error}</div>}
+
+      {extracting && extractionProgress && (
+        <section className="panel extraction-progress-panel" aria-live="polite">
+          <div className="extraction-progress-header">
+            <strong>Extracting graph</strong>
+            <span>{extractionProgress.progress}%</span>
+          </div>
+          <div className="progress extraction-progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={extractionProgress.progress}>
+            <span style={{ width: `${extractionProgress.progress}%` }} />
+          </div>
+          <p className="hint extraction-progress-stage">{extractionProgress.stage}</p>
+        </section>
+      )}
 
       <div className="stack">
         <section className="panel">

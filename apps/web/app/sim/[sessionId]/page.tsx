@@ -26,6 +26,7 @@ export default function SimPage() {
   const [advice, setAdvice] = useState<AdvisorResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tickCount, setTickCount] = useState(0);
+  const [speed, setSpeed] = useState<1 | 2 | 4>(1);
   const [highlightedNodes, setHighlightedNodes] = useState<string[]>([]);
 
   const imageUrl = useMemo(() => layoutImageUrl(sessionId), [sessionId]);
@@ -96,9 +97,9 @@ export default function SimPage() {
         })();
       },
       onError: (message) => setError(message),
-    });
+    }, speed);
     return () => disconnect();
-  }, [sessionId, graph]);
+  }, [sessionId, graph, speed]);
 
   const displayTick = scrubIndex !== null && history[scrubIndex] ? history[scrubIndex] : tick;
 
@@ -117,6 +118,19 @@ export default function SimPage() {
                 ? `Clock ${displayTick.sim_time} · remaining to spawn ${Math.round(displayTick.remaining_to_spawn)}`
                 : "Warming up…"}
             </p>
+          </div>
+          <div className="speed-controls" aria-label="Simulation speed">
+            <span className="muted">Speed</span>
+            {[1, 2, 4].map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={`btn btn-secondary btn-sm ${speed === value ? "active" : ""}`}
+                onClick={() => setSpeed(value as 1 | 2 | 4)}
+              >
+                {value}×
+              </button>
+            ))}
           </div>
           <Link className="btn btn-secondary" href="/">
             New run

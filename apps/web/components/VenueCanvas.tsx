@@ -11,14 +11,18 @@ interface Props {
   mode?: Mode;
   tick?: SimTick | null;
   selectedNodeId?: string | null;
+  selectedEdgeId?: string | null;
   highlightedNodeIds?: string[];
   onSelectNode?: (nodeId: string | null) => void;
+  onNodeClick?: (nodeId: string) => void;
+  onSelectEdge?: (edgeId: string | null) => void;
   onMoveNode?: (nodeId: string, x: number, y: number) => void;
+  onMoveEnd?: () => void;
 }
 
 function nodeFill(node: VenueNode, tick: SimTick | null | undefined, mode: Mode): string {
   if (mode !== "sim" || !tick) {
-    return "#ffffff";
+    return "#0b2e59";
   }
   const density = tick.nodes[node.id]?.density ?? 0;
   const severity = tick.bottlenecks.find((b) => b.node_id === node.id)?.severity;
@@ -41,9 +45,13 @@ export default function VenueCanvas({
   mode = "review",
   tick = null,
   selectedNodeId = null,
+  selectedEdgeId = null,
   highlightedNodeIds = [],
   onSelectNode,
+  onNodeClick,
+  onSelectEdge,
   onMoveNode,
+  onMoveEnd,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -70,7 +78,10 @@ export default function VenueCanvas({
         if (!p) return;
         onMoveNode(dragging, p.x, p.y);
       }}
-      onPointerUp={() => setDragging(null)}
+      onPointerUp={() => {
+        if (dragging) onMoveEnd?.();
+        setDragging(null);
+      }}
       onPointerLeave={() => setDragging(null)}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -86,20 +97,37 @@ export default function VenueCanvas({
           const opacity = isHighlightMode && !isHighlighted ? 0.15 : 1;
           
           return (
-            <line
-              key={edge.id}
-              x1={s.x}
-              y1={s.y}
-              x2={t.x}
-              y2={t.y}
-              stroke={congested ? "#ff9933" : (mode === "sim" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.6)")}
-              strokeWidth={congested ? 0.012 : 0.008}
-              style={{ 
-                filter: congested ? "drop-shadow(0 0 2px #ff9933)" : "none", 
-                transition: "all 0.3s ease",
-                opacity
-              }}
-            />
+            <g key={edge.id}>
+              {/* The wider transparent line makes short edges easier to select. */}
+              {mode === "review" && (
+                <line
+                  x1={s.x}
+                  y1={s.y}
+                  x2={t.x}
+                  y2={t.y}
+                  stroke="transparent"
+                  strokeWidth="0.035"
+                  pointerEvents="stroke"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectNode?.(null);
+                    onSelectEdge?.(edge.id);
+                  }}
+                />
+              )}
+              <line
+                x1={s.x}
+                y1={s.y}
+                x2={t.x}
+                y2={t.y}
+                stroke={selectedEdgeId === edge.id ? "var(--accent)" : (congested ? "#ff9933" : "rgba(11,46,89,0.72)")}
+                strokeWidth={selectedEdgeId === edge.id ? 0.014 : (congested ? 0.012 : 0.008)}
+                style={{
+                  opacity
+                }}
+                pointerEvents="none"
+              />
+            </g>
           );
         })}
         {graph.nodes.map((node) => {
@@ -127,37 +155,40 @@ export default function VenueCanvas({
                 cy={node.y}
                 r={r}
                 fill={nodeFill(node, tick, mode)}
-                stroke={mode === "sim" ? "none" : (selected ? "#0172b8" : "#0b2e59")}
+                stroke={mode === "sim" ? "none" : (selected ? "#0172b8" : "#ffffff")}
                 strokeWidth={selected ? 0.01 : 0.006}
                 style={{ 
                   cursor: mode === "review" ? "grab" : "default",
-                  filter: mode === "sim" ? `drop-shadow(0 0 3px ${nodeFill(node, tick, mode)})` : "none",
-                  transition: "all 0.3s ease"
+                  // Do not animate cx/cy while dragging: the node should track
+                  // the pointer on every update. Highlight opacity is handled
+                  // by the parent <g> above.
                 }}
                 onPointerDown={(e) => {
                   if (mode !== "review") return;
                   e.currentTarget.setPointerCapture(e.pointerId);
                   setDragging(node.id);
                   onSelectNode?.(node.id);
+                  onSelectEdge?.(null);
                 }}
-                onClick={() => onSelectNode?.(node.id)}
+                onClick={() => {
+                  if (onNodeClick) onNodeClick(node.id);
+                  else onSelectNode?.(node.id);
+                }}
               />
 
               <text
                 x={node.x}
                 y={Math.max(0.04, node.y - 0.04)}
-                fill="#ffffff"
+                fill="#0b2e59"
                 fontSize="0.026"
                 fontWeight="bold"
                 textAnchor="middle"
                 style={{ 
                   pointerEvents: "none", 
                   userSelect: "none",
-                  filter: "drop-shadow(0px 1px 3px rgba(0,0,0,0.9))",
-                  textShadow: "0 0 4px rgba(0,0,0,0.8)"
                 }}
               >
-                {node.label}
+                {node.label}{node.bidirectional ? " ↔" : ""}
               </text>
             </g>
           );

@@ -235,7 +235,7 @@ PRESETS: dict[str, dict] = {
         "id": "banquet",
         "label": "Banquet / wedding hall",
         "description": "Matches fixtures/test-floorplan.png mock extraction.",
-        "default_crowd": 400,
+        "default_crowd": 450,
         "graph_factory": banquet_hall_graph,
         "schedule_factory": default_wedding_schedule,
     },

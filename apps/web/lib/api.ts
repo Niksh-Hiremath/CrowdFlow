@@ -5,6 +5,8 @@ import type {
   SessionResponse,
   SimTick,
   VenueGraph,
+  ExtractionProgress,
+  RevisionProgress,
 } from "./types";
 
 async function readError(res: Response): Promise<string> {
@@ -36,6 +38,7 @@ export async function extractLayout(
   sessionId: string,
   file: Blob,
   filename = "layout.png",
+  onProgress?: (status: ExtractionProgress) => void,
 ): Promise<VenueGraph> {
   const form = new FormData();
   form.append("file", file, filename);
@@ -44,7 +47,24 @@ export async function extractLayout(
     body: form,
   });
   if (!res.ok) throw new Error(await readError(res));
-  return res.json();
+  const initial = await res.json();
+  // Mock-mode callers still receive the graph directly for backwards compatibility.
+  if (Array.isArray(initial.nodes) && Array.isArray(initial.edges)) {
+    if (initial.nodes.length === 0) throw new Error("Extraction returned an empty graph");
+    return initial as VenueGraph;
+  }
+
+  let status = initial as ExtractionProgress;
+  onProgress?.(status);
+  for (;;) {
+    if (status.status === "completed" && status.graph) return status.graph;
+    if (status.status === "failed") throw new Error(status.error || "Extraction failed");
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    const statusRes = await fetch(`/api/sessions/${sessionId}/layout/extract/status`);
+    if (!statusRes.ok) throw new Error(await readError(statusRes));
+    status = (await statusRes.json()) as ExtractionProgress;
+    onProgress?.(status);
+  }
 }
 
 export function layoutImageUrl(sessionId: string): string {
@@ -64,6 +84,7 @@ export async function putGraph(sessionId: string, graph: VenueGraph): Promise<Ve
 export async function reviseGraph(
   sessionId: string,
   instruction: string,
+  onProgress?: (status: RevisionProgress) => void,
 ): Promise<VenueGraph> {
   const res = await fetch(`/api/sessions/${sessionId}/graph/revise`, {
     method: "POST",
@@ -71,7 +92,23 @@ export async function reviseGraph(
     body: JSON.stringify({ instruction }),
   });
   if (!res.ok) throw new Error(await readError(res));
-  return res.json();
+  const initial = await res.json();
+  if (Array.isArray(initial.nodes) && Array.isArray(initial.edges)) {
+    if (initial.nodes.length === 0) throw new Error("Graph revision returned an empty graph");
+    return initial as VenueGraph;
+  }
+
+  let status = initial as RevisionProgress;
+  onProgress?.(status);
+  for (;;) {
+    if (status.status === "completed" && status.graph) return status.graph;
+    if (status.status === "failed") throw new Error(status.error || "Graph revision failed");
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    const statusRes = await fetch(`/api/sessions/${sessionId}/graph/revise/status`);
+    if (!statusRes.ok) throw new Error(await readError(statusRes));
+    status = (await statusRes.json()) as RevisionProgress;
+    onProgress?.(status);
+  }
 }
 
 export async function confirmGraph(sessionId: string): Promise<ConfirmResponse> {
@@ -112,13 +149,14 @@ export type StreamHandlers = {
   onError: (message: string) => void;
 };
 
-export function connectSimStream(sessionId: string, handlers: StreamHandlers): () => void {
+export function connectSimStream(sessionId: string, handlers: StreamHandlers, speed = 1): () => void {
   const template =
     process.env.NEXT_PUBLIC_API_WS ||
     "ws://127.0.0.1:8000/api/sessions/{id}/sim/stream";
-  const url = template.includes("{id}")
+  const baseUrl = template.includes("{id}")
     ? template.replace("{id}", sessionId)
     : `ws://127.0.0.1:8000/api/sessions/${sessionId}/sim/stream`;
+  const url = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}speed=${Math.min(4, Math.max(1, speed))}`;
   const ws = new WebSocket(url);
 
   ws.onmessage = (event) => {

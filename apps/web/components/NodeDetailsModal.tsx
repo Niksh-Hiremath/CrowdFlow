@@ -47,7 +47,9 @@ export default function NodeDetailsModal({ node, imageUrl, onClose, onUpdate, on
       >
         <div className="modal-header" style={{ borderBottom: "none", paddingBottom: 0 }}>
           <div>
-            <h2 style={{ fontSize: "1.5rem", marginBottom: 4 }}>{node.label || "Unnamed Room"}</h2>
+            <h2 style={{ fontSize: "1.5rem", marginBottom: 4 }}>
+              {node.label || "Unnamed Room"}{node.bidirectional ? " · Bidirectional" : ""}
+            </h2>
             <p style={{ color: "var(--muted)", fontSize: "0.85rem", margin: 0 }}>Node ID: {node.id}</p>
           </div>
         </div>
@@ -79,7 +81,7 @@ export default function NodeDetailsModal({ node, imageUrl, onClose, onUpdate, on
                 width: "100%",
                 height: "100%",
                 objectFit: "contain",
-                filter: "invert(1) hue-rotate(180deg) brightness(1.2)",
+                filter: "none",
                 pointerEvents: "none"
               }}
             />
